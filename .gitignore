@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Data never lives in the repo (KATA_DATA defaults to E:\kata-data); safety net:
+/data/
+*.bsor
+*.parquet
+*.duckdb
+*.duckdb.wal
+
+# IDE
+.idea/workspace.xml
+.idea/usage.statistics.xml
+.idea/shelf/
+out/

@@ -1,0 +1,37 @@
+[project]
+name = "kata"
+version = "0.1.0"
+description = "Music-to-Beat-Saber map generation via learned player motion"
+authors = [
+    { name = "ISenseHostility", email = "yaboijarno@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "duckdb>=1.5.6",
+    "httpx>=0.28.1",
+    "numpy>=2.5.3",
+    "polars>=2.0.0",
+    "pyarrow>=26.0.0",
+    "pydantic>=2.14.0",
+    "soundfile>=0.14.0",
+    "typer>=0.27.3",
+    "zstandard>=0.25.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+]
+
+[project.scripts]
+kata = "kata.cli:app"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
