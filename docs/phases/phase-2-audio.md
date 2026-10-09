@@ -1,7 +1,8 @@
 # Phase 2 — Audio features
 
 Status: **APPROVED 2026-10-09.** Decisions D1–D8 resolved. Step 0
-environment spike passed (§16). Next: implementation, then the pilot (§11).
+environment spike passed (§16). Implementation plan: docs/phases/phase-2-audio-plan.md
+(prototype findings in §17). Next: implementation, then the pilot (§11).
 Last updated: 2026-10-09
 
 ## 0. Summary
@@ -158,7 +159,7 @@ The stems are reduced to features in memory and then discarded:
 
 | Array | Shape | dtype | Definition |
 |-------|-------|-------|------------|
-| `stem_mel` | (4, T, 64) | fp16 | As `mel`, but 64 bands (stems need less frequency detail) |
+| `stem_mel` | (T, 4, 64) | fp16 | As `mel`, but 64 bands (stems need less frequency detail). Time-major like every other array, so one window slice serves all arrays |
 | `curves[:, onset_<stem>]` | (T,) × 4 | fp16 | Spectral flux on the 64-band stem mel |
 | `curves[:, rms_<stem>]` | (T,) × 4 | fp16 | Stem RMS in dBFS |
 
@@ -215,8 +216,9 @@ downbeat times. Per song we derive:
   downbeat;
 - `est_bpm` = 60 / median inter-beat interval;
 - `est_meter` = the most common number of beats per bar;
-- `tempo_cv` = coefficient of variation of the inter-beat intervals (a
-  "is the tempo steady?" flag).
+- `tempo_cv` = median absolute deviation of the inter-beat intervals divided
+  by their median (a robust "is the tempo steady?" flag; a plain coefficient
+  of variation was ~0.28 on steady songs because of a few missed beats).
 
 Beat Saber maps carry no bar or time-signature information. Audio downbeats
 are therefore the only bar-phase signal we have.
@@ -250,11 +252,14 @@ spectral clustering"):
 
 1. Beat-synchronous features: mean `chroma` and 20 MFCCs (DCT of `mel`) per
    audio beat.
-2. Recurrence matrix on chroma (k-NN affinity, k = 2√n), path-enhanced with
-   a diagonal median filter; local adjacency from MFCC distances between
-   neighbouring beats.
+2. Recurrence matrix on chroma stacked with its previous and next beat
+   (a *centred* delay embedding; a past-only one put boundaries about a bar
+   late), mutual k-NN with k = ⌈2√n⌉, path-enhanced with a diagonal median
+   filter; local adjacency from MFCC distances between neighbouring beats.
 3. Laplacian embedding of the combined graph; *k*-means for
-   `k ∈ {2 … 8}`; *k* is chosen by the eigengap.
+   `k ∈ {2 … 8}`. *k* is tried in eigengap order, and the first *k* whose
+   merged segmentation still has ≥ 2 labels wins (the plain eigengap
+   sometimes spent clusters on a few isolated beats, which then merged away).
 4. Boundaries are the label changes, snapped to the nearest audio downbeat.
    Segments shorter than 8 beats are merged into a neighbour.
 
@@ -356,7 +361,7 @@ $KATA_DATA/
       stats.json                          # train-split mean/std per bin and column
       {sha[:2]}/{sha}/
         mel.npy          (T,128)   fp16
-        stem_mel.npy     (4,T,64)  fp16
+        stem_mel.npy     (T,4,64)  fp16
         chroma.npy       (T,12)    fp16
         curves.npy       (T,12)    fp16
   processed/
@@ -441,13 +446,14 @@ lock is limited to Windows and Linux (`[tool.uv] environments`): demucs pins
 ```
 src/kata/audio/
   frames.py       # SR/HOP/FPS, n_frames, frame_index, sample, beat_grid_times  (§3, §7.2)
-  io.py           # decode (soundfile) → resample (soxr) → stereo/mono canonical audio
-  spectral.py     # torch STFT, mel & chroma filterbanks, log-mel, flux, RMS  (§4.1)
-  stems.py        # Demucs wrapper → per-stem features  (§4.2)
-  beats.py        # Beat This wrapper, beat_in_bar/tempo, F-measure, grid agreement  (§5)
+  decode.py       # decode (soundfile) → resample (soxr) → stereo/mono canonical audio
+  spectral.py     # torch STFT, mel & chroma filterbanks, log-mel, flux, RMS  (§4.1, §4.2)
+  models.py       # Demucs + Beat This wrappers  (§4.2, §4.3)
+  extract.py      # one song → all arrays, events and scalars  (§4)
+  beats.py        # beat_in_bar, tempo stats, F-measure, grid agreement  (§5)
   structure.py    # beat-sync features, recurrence, spectral clustering  (§6)
-  sync.py         # map ↔ audio lag estimation  (§7.3)
-  store.py        # feature dir layout, atomic .npy write, mmap read, window(), manifest
+  sync.py         # map ↔ audio lag estimation, onset-bias calibration  (§7.3)
+  store.py        # feature dir layout, atomic .npy write, mmap read, window()
   pipeline.py     # stages below, using kata.data.state.State for resumability
   report.py
 cli.py            # new `kata audio <stage>` group
@@ -573,6 +579,7 @@ Phase 1's usage posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-09 | D7 | Feature disk budget ≤ 100 GB |
 | 2026-10-09 | D8 | No split changes (moot after D6) |
 | 2026-10-09 | — | Step 0 passed. Stack pinned (torch 2.11.0+cu130). Demucs `shifts=0` for determinism (§16) |
+| 2026-10-10 | — | Implementation plan written; prototype corrections to §4.2, §5.1, §6 (§17) |
 
 ---
 
@@ -615,3 +622,41 @@ torch hub cache) and `htdemucs` (from the Hugging Face Hub).
 - The 154 vs. 150 BPM gap on the first song is a first hint that map grids
   and audio beats can disagree beyond simple double/half. §5.2 measures this
   across the dataset in the pilot.
+
+---
+
+## 17. Prototype findings (2026-10-10)
+
+Every module in the implementation plan was prototyped and its tests run
+(99 passing, including the Phase 1 suite and the GPU model tests) before the
+plan was written. The full stage chain also ran on 4 real Tier A pilot maps
+(12 difficulties). Corrections made to this doc as a result:
+
+- `stem_mel` is stored time-major, (T, 4, 64) (§4.2, §9).
+- `tempo_cv` is MAD / median (§5.1).
+- Structure uses a centred delay embedding and a guarded choice of *k* (§6).
+
+Measurements on the 4 real maps (not yet a sample worth drawing conclusions
+from; the pilot covers ~200):
+
+| Item | Result |
+|------|--------|
+| `features` per song | 2.1–2.8 s for ~200 s of audio (~80× real time end to end) |
+| Feature size | 816 B/frame, as estimated in §9 |
+| 12 s window read | median 2.0 ms, p95 2.2 ms (criterion 6: < 5 ms) |
+| Onset detector bias (click track) | −11.3 ms: the spectral-flux peak sits about one frame before the click |
+| Sync lag, mix onsets | median −7.5 ms (range −11.5 … −0.6) |
+| Sync lag, drum onsets | median −1.5 ms (range −6.2 … +4.7) |
+| Lag spread across one map's difficulties | ≤ 0.4 ms (sync is a property of the map, as expected) |
+| Map grid vs. audio beats | all 12 difficulties `best_f` ≥ 0.9; one map at level ½ (half-time) |
+| Structure | 12–23 segments per song, 3–8 labels; repeated section sequences are recovered |
+| Boundary ↔ note-density check | hit rate 0.59 vs. 0.52 chance |
+
+Open for the pilot:
+- **Which onset source criterion 4 uses.** Mix onsets sit ~6 ms earlier than
+  drum onsets after the click-track correction, so with mix onsets
+  criterion 4 (median within ±5 ms) would fail on these 4 maps while drums
+  pass. The pilot decides whether criterion 4 uses drum onsets or a wider
+  tolerance.
+- **Whether structure is good enough.** The boundary ↔ density signal is
+  weak on 4 songs. The pilot shows whether it holds up across ~200.
