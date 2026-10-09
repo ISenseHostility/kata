@@ -18,6 +18,32 @@ dependencies = [
     "zstandard>=0.25.0",
 ]
 
+[project.optional-dependencies]
+# Phase 2 GPU stack: `uv sync --extra audio`. torch is pinned to 2.11 because
+# torchaudio (required by beat-this) ends at 2.11.
+audio = [
+    "torch==2.11.0",
+    "torchaudio==2.11.0",
+    "demucs>=4.1.0",
+    "beat-this>=1.1.0",
+    "soxr>=1.1.0",
+    "scipy>=1.18.1",
+]
+
+[tool.uv]
+# Windows is the dev machine; Linux keeps WSL2 open as a fallback. Excluding
+# macOS avoids demucs' numpy<2 pin on Intel Macs.
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [build-system]
 requires = ["uv_build>=0.12.22,<0.13.0"]
 build-backend = "uv_build"

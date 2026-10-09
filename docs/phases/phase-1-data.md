@@ -172,9 +172,9 @@ the storage budget.
   2. Otherwise normalised `(songAuthorName, songName)`: lowercase, strip
      brackets/feat./punctuation.
 
-  Near-duplicate audio (same song, different encode) is caught in Phase 2 by
-  audio fingerprinting. Phase 1 records `song_group_id` so that this can be
-  refined later.
+  Near-duplicate audio (same song, different encode) was planned for Phase 2
+  fingerprinting, but Phase 2 skipped it (phase-2-audio.md D6). Phase 1
+  records `song_group_id` so that this can be refined later.
 - **Splits**: assigned per song group as
   `hash(song_group_id) mod 100 → train < 90 ≤ val < 95 ≤ test`. The split is
   deterministic and stored in the `maps` table. It is stable when new maps

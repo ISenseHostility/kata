@@ -18,8 +18,7 @@ Goal: a clean, queryable dataset of maps, audio and replays.
 Goal: precomputed, cached conditioning features per song.
 - Mel spectrograms, Demucs stems, beat/downbeat grid, structure labels
 - Time alignment with map BPM grids and replay timestamps
-  ⚠️ Detailed plan needed: frame rate, feature resolution, alignment
-  strategy, stem models, compute/time budget.
+  📝 Design doc: docs/phases/phase-2-audio.md (approved 2026-10-09).
 
 ## Phase 3 — Validator + rule-based baseline
 Goal: a playability scorer and a baseline mapper to beat.
