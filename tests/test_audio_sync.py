@@ -37,3 +37,12 @@ def test_note_train_drops_duplicates_and_out_of_range():
     t = note_train([1.0, 1.0, 5.0, -1.0], 301)
     assert t.sum() == pytest.approx(1.0, abs=1e-6)
     assert int(np.argmax(t)) == 100
+
+
+def test_measure_onset_bias_is_small_and_stable():
+    pytest.importorskip("torch")
+    from kata.audio.spectral import SpectralExtractor
+    sp = SpectralExtractor("cpu")
+    b = measure_onset_bias(sp)
+    assert -0.03 < b < 0.0
+    assert b == measure_onset_bias(sp)
