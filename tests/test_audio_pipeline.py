@@ -97,3 +97,22 @@ def test_features_refuses_a_changed_config(paths):
     other.config = {**other.config, "fps": 50}
     with pytest.raises(ValueError, match="bump FEATURE_VERSION"):
         ap.features(paths, extractor=other)
+
+
+def test_structure_sync_stats(paths):
+    ap.features(paths, extractor=FakeExtractor())
+    assert ap.structure(paths)["status"] == {"ok": 2}
+    assert pl.read_parquet(paths.processed / "audio_segments.parquet")["audio_sha256"].n_unique() == 2
+
+    assert ap.sync(paths)["difficulties"] == 2
+    sync = pl.read_parquet(paths.processed / "map_audio_sync.parquet")
+    assert sync.height == 4 and set(sync["src"]) == {"mix", "drums"}
+    ba = pl.read_parquet(paths.processed / "beat_agreement.parquet").sort("hash")
+    assert ba["best_level"].to_list() == [1.0, 1.0] and ba["best_f"].to_list() == [1.0, 1.0]
+
+    ap.stats(paths)
+    stats = json.loads((FeatureStore(paths.features).stats_path).read_text())
+    assert stats["split"] == "train" and stats["songs"] == ["aa"]  # bb is val, cc failed
+    stored = np.asarray(FeatureStore(paths.features).load("aa", "mel"), np.float64)
+    assert stats["arrays"]["mel"]["mean"][0] == pytest.approx(stored[:, 0].mean())
+    assert stats["arrays"]["stem_mel"]["shape"] == [4, 64]

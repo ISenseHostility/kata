@@ -116,3 +116,113 @@ def _features(paths, state, summary, pilot=False, limit=0, device="cuda", extrac
                    status=state.counts(FEATURES_STAGE), **write_feature_tables(paths, state, store))
 
 features = _with_state(FEATURES_STAGE, _features)
+
+
+# --------------------------------------------------------------------------- structure
+
+def _structure_one(features_root: str, sha: str, duration_s: float) -> list[dict]:
+    store = FeatureStore(Path(features_root))
+    b, d = store.events(sha)
+    segs = segment(np.asarray(store.load(sha, "chroma"), np.float32),
+                   np.asarray(store.load(sha, "mel"), np.float32), b, d, duration_s)
+    n_labels = len({s["label"] for s in segs})
+    return [{"audio_sha256": sha, "seg_idx": i, **s, "n_labels": n_labels} for i, s in enumerate(segs)]
+
+
+def _structure(paths, state, summary, pilot=False):
+    todo = ok_songs(paths)
+    if pilot:
+        todo = todo.join(songs(paths, pilot=True).select("audio_sha256"), on="audio_sha256", how="semi")
+    rows = []
+    with ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as pool:
+        futures = {r["audio_sha256"]: pool.submit(_structure_one, str(paths.features), r["audio_sha256"],
+                                                  r["duration_s"]) for r in todo.iter_rows(named=True)}
+        for sha, fut in futures.items():
+            try:
+                rows += fut.result()
+                state.mark(STRUCTURE_STAGE, sha, "ok")
+            except Exception as e:
+                state.mark(STRUCTURE_STAGE, sha, "error", error=f"{type(e).__name__}: {e}"[:500])
+    pl.DataFrame(rows, infer_schema_length=None).write_parquet(paths.processed / "audio_segments.parquet")
+    summary.update(songs=todo.height, segments=len(rows), status=state.counts(STRUCTURE_STAGE))
+
+structure = _with_state(STRUCTURE_STAGE, _structure)
+
+
+# --------------------------------------------------------------------------- sync
+
+def _sync(paths, state, summary, pilot=False):
+    from kata.audio.spectral import SpectralExtractor
+    from kata.audio.sync import measure_onset_bias
+
+    P = paths.processed
+    maps = pl.read_parquet(P / "maps.parquet", columns=["hash", "audio_sha256", "pilot"])
+    if pilot:
+        maps = maps.filter(pl.col("pilot"))
+    maps = maps.join(ok_songs(paths), on="audio_sha256", how="semi").select("hash", "audio_sha256")
+    diffs = (pl.read_parquet(P / "difficulties.parquet", columns=DIFF_KEY + ["tier", "parse_status"])
+             .filter(pl.col("parse_status") == "ok").join(maps, on="hash"))
+    notes = (pl.read_parquet(P / "notes.parquet", columns=DIFF_KEY + ["beat", "time_s"])
+             .join(maps.select("hash"), on="hash", how="semi"))
+    tempo = pl.read_parquet(P / "tempo_maps.parquet").join(maps.select("hash"), on="hash", how="semi")
+    notes_by = notes.partition_by(DIFF_KEY, as_dict=True)
+    tempo_by = tempo.partition_by(DIFF_KEY, as_dict=True)
+    bias = measure_onset_bias(SpectralExtractor("cpu"))
+    store = FeatureStore(paths.features)
+    sync_rows, grid_rows = [], []
+    for (sha,), group in diffs.group_by("audio_sha256"):
+        curves = np.asarray(store.load(sha, "curves"), np.float32)
+        beats, _ = store.events(sha)
+        for d in group.iter_rows(named=True):
+            key = tuple(d[k] for k in DIFF_KEY)
+            n = notes_by.get(key)
+            if n is None or n.height == 0:
+                continue
+            base = {**dict(zip(DIFF_KEY, key)), "tier": d["tier"], "audio_sha256": sha}
+            times = n["time_s"].to_numpy()
+            for src, col in (("mix", "onset_mix"), ("drums", "onset_drums")):
+                lag = estimate_lag(curves[:, CURVE_COLUMNS.index(col)], times, bias)
+                sync_rows.append({**base, "src": src, "n_notes": int(len(np.unique(times))), **lag})
+            rows = tempo_by[key].to_dicts()
+            beat = n["beat"].to_numpy()
+            grid = beat_grid_times(tempo_from_rows(rows), math.ceil(beat.min()), math.floor(beat.max()))
+            map_bpm = min(rows, key=lambda r: r["seg_idx"])["bpm"]
+            grid_rows.append({**base, "map_bpm": map_bpm, "n_grid": len(grid), **grid_agreement(grid, beats)})
+    pl.DataFrame(sync_rows, infer_schema_length=None).write_parquet(P / "map_audio_sync.parquet")
+    pl.DataFrame(grid_rows, infer_schema_length=None).write_parquet(P / "beat_agreement.parquet")
+    summary.update(onset_bias_ms=bias * 1000, difficulties=len(grid_rows))
+
+sync = _with_state("audio-sync", _sync)
+
+
+# --------------------------------------------------------------------------- stats
+
+def _stats(paths, state, summary, pilot=False):
+    maps = pl.read_parquet(paths.processed / "maps.parquet", columns=["audio_sha256", "split", "pilot"])
+    if pilot:
+        maps = maps.filter(pl.col("pilot"))
+    train = maps.filter(pl.col("split") == "train").join(ok_songs(paths), on="audio_sha256", how="semi")
+    shas = sorted(set(train["audio_sha256"]))
+    if len(shas) > STATS_MAX_SONGS:
+        shas = sorted(random.Random(0).sample(shas, STATS_MAX_SONGS))
+    store = FeatureStore(paths.features)
+    acc: dict[str, list] = {}
+    for sha in shas:
+        for name in ARRAYS:
+            a = np.asarray(store.load(sha, name), dtype=np.float64)
+            flat = a.reshape(a.shape[0], -1)
+            s = acc.setdefault(name, [np.zeros(flat.shape[1]), np.zeros(flat.shape[1]), 0, a.shape[1:]])
+            s[0] += flat.sum(axis=0)
+            s[1] += np.square(flat).sum(axis=0)
+            s[2] += flat.shape[0]
+    arrays = {}
+    for name, (s1, s2, n, shape) in acc.items():
+        mean = s1 / n
+        std = np.sqrt(np.maximum(s2 / n - mean ** 2, 0.0))
+        arrays[name] = {"shape": list(shape), "mean": mean.reshape(shape).tolist(),
+                        "std": std.reshape(shape).tolist(), "n_frames": int(n)}
+    out = {"split": "train", "n_songs": len(shas), "songs": shas, "arrays": arrays}
+    store.stats_path.write_text(json.dumps(out))
+    summary.update(n_songs=len(shas), path=str(store.stats_path))
+
+stats = _with_state("audio-stats", _stats)
