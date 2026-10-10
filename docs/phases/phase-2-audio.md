@@ -521,12 +521,16 @@ The full run starts only after you've seen the pilot report.
    has the same `T`.
 3. All timing unit tests pass (resampling, Vorbis round trip, click-track
    onsets).
-4. **Sync**: over Tier A difficulties, the median `lag_ms` lies within
-   ±5 ms of 0, and ≥ 90 % lie within ±30 ms **[thresholds tuned in pilot]**.
-   A systematic offset fails this criterion, even if each map looks fine.
+4. **Sync**: over Tier A difficulties, measured against **drum** onsets
+   (`src = 'drums'`), the median `lag_ms` lies within ±5 ms of 0, and ≥ 95 %
+   lie within ±30 ms (tuned in the pilot, §18). A systematic offset fails
+   this criterion, even if each map looks fine. Mix-onset lag is reported as
+   a diagnostic only.
 5. **Beats**: the report shows the `best_level` distribution and `best_f`
-   per tier. Sanity bar: ≥ 85 % of Tier A difficulties reach `best_f ≥ 0.8`
-   at some level **[tuned in pilot]**.
+   per tier. Report-only, with a regression floor: ≥ 65 % of Tier A
+   difficulties reach `best_f ≥ 0.8` at some level on the integer map grid
+   (tuned in the pilot; about a third of maps place notes off the integer
+   grid, §18).
 6. A random 12 s window of all four arrays reads in < 5 ms from mmap (warm
    cache). This is the Phase 4 loader budget.
 7. `stats.json` is computed from train-split songs only (automated check).
@@ -582,6 +586,9 @@ Phase 1's usage posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-09 | D8 | No split changes (moot after D6) |
 | 2026-10-09 | — | Step 0 passed. Stack pinned (torch 2.11.0+cu130). Demucs `shifts=0` for determinism (§16) |
 | 2026-10-10 | — | Implementation plan written; prototype corrections to §4.2, §5.1, §6 (§17) |
+| 2026-10-10 | — | Pilot approved (§18). Criterion 4 uses drum onsets: Tier A median within ±5 ms, ≥ 95 % within ±30 ms |
+| 2026-10-10 | — | Criterion 5 is report-only with a floor of ≥ 65 % Tier A at `best_f ≥ 0.8`; no phase-corrected grid in v1 |
+| 2026-10-10 | — | Structure segmentation accepted for v1 as a conditioning input; revisit in Phase 6 |
 
 ---
 
@@ -708,7 +715,7 @@ beat numbers are not musical beats. Beat-relative model inputs should come
 from the audio (`audio_beats`, `beat_act`/`downbeat_act`), not from the
 map's `beat` column.
 
-**Proposals (awaiting approval):**
+**Proposals (approved 2026-10-10; see §12 and §15):**
 - Criterion 4: use **drum** onsets; median Tier A lag within ±5 ms (pilot
   −2.8 ms) and ≥ 95 % within ±30 ms (pilot 99.6 %). Mix-onset lag stays in
   the report as a diagnostic (its ~4 ms extra lead is consistent across
