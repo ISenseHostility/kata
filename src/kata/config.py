@@ -58,6 +58,11 @@ class Paths:
         return self.processed / "replay_frames"
 
     @property
+    def features(self) -> Path:
+        """Phase 2 feature store root (docs/phases/phase-2-audio.md §9)."""
+        return self.root / "features"
+
+    @property
     def state_db(self) -> Path:
         return self.root / "state" / "pipeline.duckdb"
 
@@ -71,7 +76,7 @@ class Paths:
 
     def ensure(self) -> "Paths":
         for p in (self.catalog_pages, self.maps, self.bl_leaderboards, self.bl_scores,
-                  self.replays, self.processed, self.replay_frames, self.state_db.parent,
-                  self.reports):
+                  self.replays, self.processed, self.replay_frames, self.features,
+                  self.state_db.parent, self.reports):
             p.mkdir(parents=True, exist_ok=True)
         return self
