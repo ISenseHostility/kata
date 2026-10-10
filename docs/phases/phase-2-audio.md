@@ -670,7 +670,7 @@ Open for the pilot:
 `kata audio pilot` on the 199 unique pilot songs (562 difficulties), run twice:
 once on the plan's code and once after the final-review fixes (config pinning,
 versioned state, fixed window length, BPM-ratio table). Both runs gave
-identical tables. Report: `E:\kata-dataeports\phase2-pilot-2026-10-10.md`.
+identical tables. Report: `E:\kata-data\reports\phase2-pilot-2026-10-10.md`.
 
 | Item | Result |
 |------|--------|
