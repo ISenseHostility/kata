@@ -545,9 +545,11 @@ Phase 1's usage posture (phase-1-data.md D6, §10) applies unchanged:
 - Features, stems and derived tables are derived from
   copyrighted audio. They are **not republished**, and the per-song feature
   files are never committed. Aggregate statistics in reports are fine.
-- Model licences: Demucs (MIT), Beat This! (MIT code; its checkpoints were
-  trained on academic beat datasets **[check checkpoint licence at
-  setup]**). Both are consistent with non-commercial use.
+- Model licences: Demucs (MIT); Beat This! — checked 2026-10-10, the README
+  states "The code and the published model weights are released under the
+  MIT license" (this covers `final0`), and notes that some training files are
+  copyrighted or under limited Creative Commons licences, leaving it to the
+  user to judge the impact. Both are consistent with non-commercial use.
 
 ---
 
@@ -660,3 +662,61 @@ Open for the pilot:
   tolerance.
 - **Whether structure is good enough.** The boundary ↔ density signal is
   weak on 4 songs. The pilot shows whether it holds up across ~200.
+
+---
+
+## 18. Pilot findings (2026-10-10)
+
+`kata audio pilot` on the 199 unique pilot songs (562 difficulties), run twice:
+once on the plan's code and once after the final-review fixes (config pinning,
+versioned state, fixed window length, BPM-ratio table). Both runs gave
+identical tables. Report: `E:\kata-dataeports\phase2-pilot-2026-10-10.md`.
+
+| Item | Result |
+|------|--------|
+| Features | 199 / 199 ok, 0 errors; 486 s (2.4 s/song, ~80× real time) |
+| Feature size | 816 B/frame, 2.93 GB for 10.7 h → **~79 GB projected** for 5,347 songs (D7: ≤ 100 GB) |
+| 12 s window read | median 2.1 ms, p95 3.3 ms (criterion 6: < 5 ms) |
+| Peak VRAM, longest song (710 s) | 6.91 GiB on the 16 GiB RTX 5080 (§10 open item closed) |
+| Source rates | 44.1 kHz 163, 48 kHz 34, 96 kHz 2; none band-limited |
+| Tempo | 195/199 songs 4/4; median `tempo_cv` 0.000, p95 0.10 |
+| Onset detector bias | −11.29 ms (subtracted) |
+| Sync, Tier A (264 diffs) | drums median **−2.8 ms** (p25 −6.0, p75 −0.3), mix median **−6.7 ms**; 99.6 % within ±30 ms for both; 1 diff > 50 ms |
+| Sync, Tier B (287 diffs) | drums +0.4 ms, mix −4.4 ms; 97.6 % / 98.6 % within ±30 ms |
+| Sync spread within a map | median std 0.3 ms, p95 1.3 ms |
+| Grid agreement, `best_f ≥ 0.8` | Tier A **68.6 %**, Tier B 78.7 %, Tier C 54.5 % (criterion 5 bar: 85 % Tier A) |
+| Est. vs. map BPM, Tier A | ×1: 180, ×½: 60, ×¼: 2, other: 22 |
+| Structure | median 15 segments/song (9.4 s each), 5.4 labels |
+| Boundary ↔ density | Tier A 0.64 vs. 0.55 chance; Tier B 0.70 vs. 0.60 chance |
+| `stats.json` | 184 train-split songs (pilot) |
+
+**Why grid agreement is low.** In most failing difficulties the audio beats
+sit at a *constant fractional phase* of the map's beat grid (phase
+concentration R ≈ 0.99), and the notes sit at that same fraction (e.g. audio
+beats at 0.74 of a map beat, notes at 0.736). The mapper placed notes off
+the integer grid instead of setting an offset: sync is fine (lag ≈ 0), but
+map beat 0 is not a musical beat. 30 % of Tier A and 36 % of Tier B
+difficulties have their notes centred off the integer grid. Re-scoring with
+the grid shifted to the notes' circular-mean phase raises `best_f ≥ 0.8` to
+Tier A 74.6 % / Tier B 91.3 % (max of raw and shifted). The rest are mostly
+irregular audio beats (high `tempo_cv`) or maps whose BPM is not a metrical
+multiple of the audio tempo. BPM changes are not the cause: all 19 Tier A
+difficulties with BPM changes pass.
+
+**Consequence for later phases.** For roughly a third of maps, the map's
+beat numbers are not musical beats. Beat-relative model inputs should come
+from the audio (`audio_beats`, `beat_act`/`downbeat_act`), not from the
+map's `beat` column.
+
+**Proposals (awaiting approval):**
+- Criterion 4: use **drum** onsets; median Tier A lag within ±5 ms (pilot
+  −2.8 ms) and ≥ 95 % within ±30 ms (pilot 99.6 %). Mix-onset lag stays in
+  the report as a diagnostic (its ~4 ms extra lead is consistent across
+  tiers).
+- Criterion 5: keep it report-only, as the spec's "sanity bar" wording
+  intends, with a regression floor of ≥ 65 % of Tier A at `best_f ≥ 0.8` on
+  the integer grid. Record the off-grid finding above instead of adding a
+  phase-corrected column in v1.
+- Structure: accept for v1. Boundaries beat chance by ~9 points in both
+  tiers across ~200 songs: weak but consistent, and segments are a
+  conditioning input, not a gate. Revisit in Phase 6.
