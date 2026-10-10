@@ -11,6 +11,8 @@ from kata.audio.store import STEMS
 DEMUCS_MODEL = "htdemucs"
 BEAT_CHECKPOINT = "final0"
 BEAT_FPS = 50
+DEMUCS_ARGS = {"shifts": 0, "overlap": 0.25, "split": True}
+BEAT_POSTPROCESS = "minimal"
 
 
 class StemSeparator:
@@ -19,8 +21,7 @@ class StemSeparator:
     def __init__(self, device: str = "cuda"):
         from demucs.api import Separator
         self.device = device
-        self.sep = Separator(model=DEMUCS_MODEL, device=device, shifts=0, overlap=0.25,
-                             split=True, progress=False)
+        self.sep = Separator(model=DEMUCS_MODEL, device=device, progress=False, **DEMUCS_ARGS)
         if tuple(self.sep.model.sources) != STEMS:
             raise RuntimeError(f"unexpected stem order {self.sep.model.sources}")
 
@@ -38,7 +39,7 @@ class BeatTracker:
         from beat_this.inference import Audio2Frames
         from beat_this.model.postprocessor import Postprocessor
         self.a2f = Audio2Frames(checkpoint_path=BEAT_CHECKPOINT, device=device)
-        self.post = Postprocessor(type="minimal", fps=BEAT_FPS)
+        self.post = Postprocessor(type=BEAT_POSTPROCESS, fps=BEAT_FPS)
 
     def __call__(self, mono: np.ndarray, n_frames: int) -> dict[str, np.ndarray]:
         """-> beat_act, downbeat_act (n_frames,) at 100 fps; beats, downbeats in seconds."""

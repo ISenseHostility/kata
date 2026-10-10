@@ -50,3 +50,10 @@ def test_window_pads_with_silence_rows(tmp_path):
 def test_curve_silence_row_matches_the_columns():
     assert len(SILENCE["curves"]) == len(CURVE_COLUMNS)
     assert all((v == -100) == c.startswith("rms_") for v, c in zip(SILENCE["curves"], CURVE_COLUMNS))
+
+
+def test_window_length_does_not_depend_on_the_start_time(tmp_path):
+    st = FeatureStore(tmp_path)
+    st.write("abcdef", arrays(3000), [], [])
+    lengths = {st.window("abcdef", s, s + 12.0)["mel"].shape[0] for s in np.arange(0.0, 10.0, 0.0037)}
+    assert lengths == {1200}

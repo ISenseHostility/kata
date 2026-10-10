@@ -24,6 +24,11 @@ from kata.config import Paths
 from kata.data.pipeline import _check_disk, _with_state
 
 FEATURES_STAGE = "audio-features"
+
+
+def items_stage(store: FeatureStore) -> str:
+    """State-DB stage of per-song feature items: one per FEATURE_VERSION, so a bump starts from scratch."""
+    return f"{FEATURES_STAGE}/{store.version}"
 STRUCTURE_STAGE = "audio-structure"
 STATS_MAX_SONGS = 500
 DIFF_KEY = ["hash", "characteristic", "difficulty"]
@@ -51,10 +56,11 @@ def ok_songs(paths: Paths) -> pl.DataFrame:
 def write_feature_tables(paths: Paths, state, store: FeatureStore) -> dict:
     """audio_features / audio_beats / audio_tempo, rebuilt from the state DB and the stored events."""
     rows = state.con.execute("SELECT key, status, error, info FROM items WHERE stage = ? ORDER BY key",
-                             [FEATURES_STAGE]).fetchall()
+                             [items_stage(store)]).fetchall()
     feats, beat_parts, tempo = [], [], []
     for sha, status, error, info in rows:
-        feats.append({"audio_sha256": sha, "status": status, "error": error, **json.loads(info or "{}")})
+        feats.append({"audio_sha256": sha, "version": store.version, "status": status, "error": error,
+                      **json.loads(info or "{}")})
         if status != "ok":
             continue
         b, d = store.events(sha)
@@ -77,7 +83,8 @@ def _features(paths, state, summary, pilot=False, limit=0, device="cuda", extrac
     store = FeatureStore(paths.features)
     ex = extractor if extractor is not None else Extractor(device)
     store.open_for_write(ex.config)
-    done = state.done(FEATURES_STAGE)
+    items = items_stage(store)
+    done = state.done(items)
     todo = [r for r in all_songs.iter_rows(named=True)
             if not (r["audio_sha256"] in done and store.has(r["audio_sha256"]))]
     if limit:
@@ -103,17 +110,17 @@ def _features(paths, state, summary, pilot=False, limit=0, device="cuda", extrac
             try:
                 f = ex(fut.result())
                 store.write(sha, f.arrays, f.beats, f.downbeats)
-                state.mark(FEATURES_STAGE, sha, "ok", info=f.scalars)
+                state.mark(items, sha, "ok", info=f.scalars)
                 counts["ok"] += 1
             except Exception as e:  # recorded per song; the stage keeps going
-                state.mark(FEATURES_STAGE, sha, "error", error=f"{type(e).__name__}: {e}"[:500])
+                state.mark(items, sha, "error", error=f"{type(e).__name__}: {e}"[:500])
                 counts["error"] += 1
             n += 1
             if n % 50 == 0 or n == len(todo):
                 _check_disk(paths)
                 print(f"  [{FEATURES_STAGE}] {n}/{len(todo)}", flush=True)
     summary.update(songs=all_songs.height, processed=len(todo), **counts,
-                   status=state.counts(FEATURES_STAGE), **write_feature_tables(paths, state, store))
+                   status=state.counts(items), **write_feature_tables(paths, state, store))
 
 features = _with_state(FEATURES_STAGE, _features)
 

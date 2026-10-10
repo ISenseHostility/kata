@@ -127,3 +127,21 @@ def test_report(paths):
     for heading in ("## 2. Features", "## 4. Map grid vs. audio beats", "## 5. Map ↔ audio sync",
                     "## 6. Structure", "## 7. Normalisation stats"):
         assert heading in text
+
+
+def test_a_version_bump_starts_from_scratch(paths, monkeypatch):
+    from kata.audio import store as store_mod
+    ap.features(paths, extractor=FakeExtractor())
+    monkeypatch.setattr(store_mod, "FEATURE_VERSION", "v2")
+    fx = FakeExtractor()
+    s = ap.features(paths, pilot=True, extractor=fx)
+    assert fx.calls == 1 and s["error"] == 0
+    af = pl.read_parquet(paths.processed / "audio_features.parquet")
+    assert af["audio_sha256"].to_list() == ["aa"] and af["version"].to_list() == ["v2"]
+
+
+def test_report_compares_estimated_and_map_bpm(paths):
+    ap.features(paths, extractor=FakeExtractor())
+    ap.sync(paths)
+    text = open(ap.report(paths, name="test")["path"], encoding="utf-8").read()
+    assert "Estimated vs. map BPM" in text and "est_over_map" in text

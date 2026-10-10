@@ -109,6 +109,16 @@ def write_report(paths: Paths, state, name: str) -> Path:
                     round(avg(CAST(best_f >= 0.8 AS INT)), 3) share_best_f_ge_08,
                     round(quantile_cont(f_l1, 0.5), 3) median_f_level1
                     FROM beat_agreement GROUP BY 1 ORDER BY 1""")), ""]
+        if has("audio_tempo"):
+            out += ["Estimated vs. map BPM (audio est_bpm / the map's first BPM, within 4 % of a metrical ratio):", "",
+                    md_table(q("""SELECT tier, CASE
+                        WHEN abs(r - 1) <= 0.04 THEN '1' WHEN abs(r / 2 - 1) <= 0.04 THEN '2'
+                        WHEN abs(r / 0.5 - 1) <= 0.04 THEN '1/2' WHEN abs(r / 4 - 1) <= 0.04 THEN '4'
+                        WHEN abs(r / 0.25 - 1) <= 0.04 THEN '1/4' ELSE 'other' END est_over_map,
+                        count(*) diffs
+                        FROM (SELECT b.tier, t.est_bpm / b.map_bpm r FROM beat_agreement b
+                              JOIN audio_tempo t USING (audio_sha256) WHERE b.map_bpm > 0)
+                        GROUP BY ALL ORDER BY tier, diffs DESC""")), ""]
 
     if has("map_audio_sync"):
         out += ["## 5. Map ↔ audio sync", "",

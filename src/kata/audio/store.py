@@ -34,7 +34,8 @@ def _atomic_save(path: Path, arr: np.ndarray) -> None:
 
 class FeatureStore:
     def __init__(self, root: Path):
-        self.dir = Path(root) / FEATURE_VERSION
+        self.version = FEATURE_VERSION
+        self.dir = Path(root) / self.version
 
     @property
     def config_path(self) -> Path:
@@ -80,8 +81,9 @@ class FeatureStore:
         return self.load(sha, "beats", mmap=False), self.load(sha, "downbeats", mmap=False)
 
     def window(self, sha: str, start_s: float, end_s: float) -> dict[str, np.ndarray]:
-        """Frames [round(start_s*FPS), round(end_s*FPS)) of every array; outside the song = silence."""
-        i0, i1 = int(round(start_s * FPS)), int(round(end_s * FPS))
+        """round((end_s - start_s)*FPS) frames from round(start_s*FPS) of every array; outside the song = silence."""
+        i0 = int(round(start_s * FPS))
+        i1 = i0 + int(round((end_s - start_s) * FPS))  # length depends on the duration only
         out = {}
         for n in ARRAYS:
             a = self.load(sha, n)

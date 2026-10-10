@@ -15,6 +15,8 @@ MEL_FMAX = 16000.0
 CHROMA_FMIN = 55.0
 CHROMA_FMAX = 5000.0
 DB_FLOOR = -100.0
+FLUX_MAX_BINS = 3  # SuperFlux max filter width over mel bins
+RMS_FLOOR = 1e-5  # amplitude floor before dB
 
 _F_SP = 200.0 / 3
 _MIN_LOG_HZ = 1000.0
@@ -66,7 +68,7 @@ def chroma_filterbank(n_fft: int = CHROMA_N_FFT, sr: int = SR,
 
 def spectral_flux(log_mel: torch.Tensor) -> torch.Tensor:
     """(T, B) dB -> (T,) SuperFlux-style onset strength: positive rise vs. the 3-bin max of the previous frame."""
-    ref = F.max_pool1d(log_mel[None], kernel_size=3, stride=1, padding=1)[0]  # max over bins
+    ref = F.max_pool1d(log_mel[None], kernel_size=FLUX_MAX_BINS, stride=1, padding=FLUX_MAX_BINS // 2)[0]  # max over bins
     flux = (log_mel[1:] - ref[:-1]).clamp_min(0).sum(dim=1)
     return torch.cat([flux.new_zeros(1), flux])
 
@@ -100,7 +102,7 @@ class SpectralExtractor:
         xp = F.pad(x.reshape(-1, 1, x.shape[-1]), (pad, pad), mode="reflect")
         frames = xp[:, 0].unfold(-1, N_FFT, HOP)
         rms = frames.square().mean(dim=-1).sqrt().reshape(*x.shape[:-1], -1)
-        return (20.0 * torch.log10(rms.clamp_min(1e-5))).clamp_min(DB_FLOOR)
+        return (20.0 * torch.log10(rms.clamp_min(RMS_FLOOR))).clamp_min(DB_FLOOR)
 
     def _chroma(self, x: torch.Tensor) -> torch.Tensor:
         c = self.chroma_fb @ self._power(x, CHROMA_N_FFT, self.chroma_window)

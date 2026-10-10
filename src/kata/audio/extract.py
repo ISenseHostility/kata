@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib.metadata import version
 
 import numpy as np
 
 from kata.audio import decode
-from kata.audio import spectral
+from kata.audio import models, spectral
 from kata.audio.frames import FPS, HOP, SR, n_frames
 from kata.audio.store import CURVE_COLUMNS, STEMS
 
@@ -27,8 +28,11 @@ def feature_config(separator_name: str, beat_name: str) -> dict:
             "chroma_fmax": spectral.CHROMA_FMAX, "db_floor": spectral.DB_FLOOR,
             "n_mels_mix": 128, "n_mels_stem": 64, "resampler": "soxr-VHQ",
             "stems": list(STEMS), "curve_columns": list(CURVE_COLUMNS),
-            "separator": separator_name, "separator_args": {"shifts": 0, "overlap": 0.25, "split": True},
-            "beat_tracker": beat_name}
+            "flux_max_bins": spectral.FLUX_MAX_BINS, "rms_floor": spectral.RMS_FLOOR, "chroma_norm": "max",
+            "dtype": "float16",
+            "separator": separator_name, "separator_args": models.DEMUCS_ARGS,
+            "beat_tracker": beat_name, "beat_postprocess": models.BEAT_POSTPROCESS, "beat_fps": models.BEAT_FPS,
+            "packages": {p: version(p) for p in ("demucs", "beat-this", "torch", "soxr")}}
 
 
 class Extractor:

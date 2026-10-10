@@ -48,3 +48,13 @@ def test_config_names_the_models():
     cfg = extractor().config
     assert cfg["separator"] == "fake-sep" and cfg["beat_tracker"] == "fake-beats"
     assert cfg["fps"] == 100 and cfg["curve_columns"] == list(CURVE_COLUMNS)
+
+
+def test_config_pins_model_arguments_and_package_versions():
+    from kata.audio import models
+    cfg = extractor().config
+    assert cfg["separator_args"] == models.DEMUCS_ARGS
+    assert cfg["beat_postprocess"] == models.BEAT_POSTPROCESS and cfg["beat_fps"] == models.BEAT_FPS
+    assert cfg["dtype"] == "float16"
+    assert {"flux_max_bins", "rms_floor", "chroma_norm"} <= set(cfg)
+    assert set(cfg["packages"]) == {"demucs", "beat-this", "torch", "soxr"}
