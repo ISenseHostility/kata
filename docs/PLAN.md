@@ -14,11 +14,12 @@ Goal: a clean, queryable dataset of maps, audio and replays.
   layout, API terms and rate limits, replay sampling (which players/scores),
   coordinate frames.
 
-## Phase 2 — Audio features
+## Phase 2 — Audio features ✅
 Goal: precomputed, cached conditioning features per song.
 - Mel spectrograms, Demucs stems, beat/downbeat grid, structure labels
 - Time alignment with map BPM grids and replay timestamps
-  📝 Design doc: docs/phases/phase-2-audio.md (approved 2026-10-09).
+  📝 Design doc: docs/phases/phase-2-audio.md (approved 2026-10-09; v1
+  built 2026-10-10: 5,347 songs, 81 GB, results in §19).
 
 ## Phase 3 — Validator + rule-based baseline
 Goal: a playability scorer and a baseline mapper to beat.

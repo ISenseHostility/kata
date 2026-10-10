@@ -1,9 +1,9 @@
 # Phase 2 — Audio features
 
-Status: **APPROVED 2026-10-09.** Decisions D1–D8 resolved. Step 0
-environment spike passed (§16). Implementation plan: docs/phases/phase-2-audio-plan.md
-(prototype findings in §17). Next: implementation, then the pilot (§11).
-Last updated: 2026-10-09
+Status: **DONE 2026-10-10.** v1 features built for all 5,347 songs; every
+acceptance criterion met (§19). Pilot findings in §18. Implementation plan:
+docs/phases/phase-2-audio-plan.md.
+Last updated: 2026-10-10
 
 ## 0. Summary
 
@@ -727,3 +727,84 @@ map's `beat` column.
 - Structure: accept for v1. Boundaries beat chance by ~9 points in both
   tiers across ~200 songs: weak but consistent, and segments are a
   conditioning input, not a gate. Revisit in Phase 6.
+
+## 19. v1 build results (2026-10-10)
+
+Report: `E:\kata-data\reports\phase2-2026-10-10.md`.
+
+**Coverage**
+- **Songs**: 5,347 / 5,347 unique audio files ok, 0 errors. That is 297.0 h
+  of audio, or 106.9M frames.
+- **Source rates**: 44.1 kHz 4,352 · 48 kHz 953 · 192 kHz 16 · 96 kHz 14 ·
+  others 12. Ten songs are band-limited (the 32 kHz, 22.05 kHz, 38 kHz and
+  44,099 Hz files). Median RMS is about −10 dBFS at every common rate.
+- **Tempo**: 4,935 songs (92 %) are estimated 4/4, with median `tempo_cv`
+  0.000. The 236 songs with `est_meter` 1 have irregular beats (median
+  `tempo_cv` 0.28).
+- **Sync and grid**: 15,182 difficulties (all parsed diffs of Phase 1).
+- **Structure**: 60,332 segments. Median 14 per song, 10.5 s long, with 5.2
+  labels.
+- **Disk**: 81.29 GB under `features/v1` (816 B/frame, as the pilot
+  projected). E: has 251 GB free.
+
+**Timings**
+- `features` took about 3.6 h of GPU time at ~2.4 s/song. It ran in three
+  sittings: the pilot's 199 songs were reused, and Claude Code's
+  low-memory guard stopped the first full run at ~2,700 songs. Each
+  restart resumed where the last one stopped, with no errors.
+- `structure` took 585 s, `sync` 321 s and `stats` 29 s.
+
+**Acceptance (§12)**
+
+| # | Criterion | Result |
+|---|-----------|--------|
+| 1 | 100 % of unique audio | 5,347 / 5,347 ok (100 %) |
+| 2 | `n_frames == n_samples // 441 + 1` | 0 mismatches |
+| 3 | Timing unit tests | 104 / 104 tests pass |
+| 4 | Sync, Tier A, drums: median within ±5 ms, ≥ 95 % within ±30 ms | median **−3.42 ms**, **98.2 %** within ±30 ms (7,463 diffs) |
+| 5 | Beats floor: ≥ 65 % of Tier A at `best_f ≥ 0.8` | **67.9 %** (Tier B 81.0 %, Tier C 48.8 %) |
+| 6 | 12 s window of all four arrays < 5 ms, warm cache | warm **p95 3.3–3.5 ms** (median 3.1 ms); see note |
+| 7 | `stats.json` from train songs only; splits unchanged | 500 songs, 0 non-train. Splits 4,926 / 249 / 262 and 4,832 song groups, as in Phase 1 |
+| 8 | Re-running a stage with no new input is a no-op | `features` re-run: `"processed": 0`. `sync` re-run: identical tables. `structure` re-run: same 60,332 segments |
+| 9 | Feature disk ≤ 100 GB | 81.29 GB |
+| 10 | Report contents | all present (§2 funnel and sizes, §1 timings, §5 lag histogram, §4 grid and BPM tables, §6 segments and boundary check) |
+
+**Notes on the criteria**
+- **Criterion 6.** The report's "Window read (12 s, warm)" line reads 18 ms
+  median, 37 ms p95, but that benchmark is cold. It reads 200 random
+  windows across 5,347 songs, so almost every read is a first touch. (On
+  the 199-song pilot, the files were still cached from extraction.) A
+  separate run read the same 200 windows three times. Pass 1 (cold) had a
+  median of 22 ms and p95 30 ms; passes 2 and 3 (warm) had a median of
+  3.1 ms and p95 3.3–3.5 ms. The 81 GB feature set does not fit in the
+  machine's 31 GB of RAM, so **Phase 4's loader will mostly see cold
+  reads** (~22 ms per window from the NVMe SSD). It needs several loader
+  workers or prefetching to stay ahead of the GPU.
+- **Criterion 8.** As in Phase 1, resumable stages skip finished items
+  (`features`), and table stages (`structure`, `sync`, `stats`, `report`)
+  rebuild deterministically. They redo their work (10 min and 5 min) but
+  produce the same output. Both sync tables (`map_audio_sync`,
+  `beat_agreement`) were byte-for-byte equal across two runs after
+  sorting. For `structure`, only the segment count was compared. Its
+  clustering is seeded, and `test_segment_is_deterministic` pins it.
+
+**Compared with the pilot**
+- **Sync**:
+  - Tier A drums −3.4 ms (pilot −2.8 ms), mix −7.5 ms (pilot −6.7 ms).
+  - Tier B drums +0.1 ms, mix −4.2 ms; 98.3 % / 99.0 % within ±30 ms.
+  - Within a map, lag std is median 0.37 ms, p95 1.98 ms.
+  - 102 Tier A diffs lag by more than 50 ms against drums.
+- **Grid agreement** at `best_f ≥ 0.8`: Tier A 67.9 % (pilot 68.6 %),
+  Tier B 81.0 % (pilot 78.7 %).
+- **Est. vs. map BPM, Tier A**: ×1 3,802 · ×½ 2,568 · other 1,018 · ×2 38 ·
+  ×¼ 37. The ×½ group is large: Beat This! often counts half the map's BPM.
+  This is consistent with `best_level` 0.5 being common (2,735 Tier A
+  diffs).
+- **Structure**: boundaries hit large density changes at 0.676 vs. 0.558
+  chance (Tier A) and 0.688 vs. 0.606 (Tier B). This is a little stronger
+  than in the pilot, and still a conditioning input, not a gate.
+
+**Housekeeping**
+- `E:\kata-data\features\_v1-pilot-pre-review` (3 GB) holds the pilot
+  features written before the final-review config change. Nothing reads
+  them, and they can be deleted.
