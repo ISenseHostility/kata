@@ -116,3 +116,14 @@ def test_structure_sync_stats(paths):
     stored = np.asarray(FeatureStore(paths.features).load("aa", "mel"), np.float64)
     assert stats["arrays"]["mel"]["mean"][0] == pytest.approx(stored[:, 0].mean())
     assert stats["arrays"]["stem_mel"]["shape"] == [4, 64]
+
+
+def test_report(paths):
+    ap.features(paths, extractor=FakeExtractor())
+    for stage in (ap.structure, ap.sync, ap.stats):
+        stage(paths)
+    path = ap.report(paths, name="test")["path"]
+    text = open(path, encoding="utf-8").read()
+    for heading in ("## 2. Features", "## 4. Map grid vs. audio beats", "## 5. Map ↔ audio sync",
+                    "## 6. Structure", "## 7. Normalisation stats"):
+        assert heading in text

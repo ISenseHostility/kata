@@ -13,6 +13,8 @@ from kata.data import pipeline
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 data = typer.Typer(no_args_is_help=True, help="Phase 1 data pipeline stages.")
 app.add_typer(data, name="data")
+audio = typer.Typer(no_args_is_help=True, help="Phase 2 audio feature stages (needs `uv sync --extra audio`).")
+app.add_typer(audio, name="audio")
 
 PILOT = typer.Option(False, "--pilot", help="Restrict to the deterministic pilot subset.")
 
@@ -82,4 +84,50 @@ def report(name: str = typer.Option("phase1", help="Report file name prefix.")):
 def pilot():
     """Run every stage on the pilot subset, then write the pilot report."""
     for stage, fn, kwargs in pipeline.PILOT_STAGES:
+        _run(stage, fn, **kwargs)
+
+
+# --------------------------------------------------------------------------- Phase 2
+# kata.audio needs the optional `audio` extra, so it is imported inside each command.
+
+@audio.command("features")
+def audio_features(pilot: bool = PILOT, limit: int = typer.Option(0, help="Max songs (0 = all)."),
+                   device: str = typer.Option("cuda", help="Torch device.")):
+    """Stems, spectral features, beats per unique audio file (GPU, resumable)."""
+    from kata.audio import pipeline as ap
+    _run("audio-features", ap.features, pilot=pilot, limit=limit, device=device)
+
+
+@audio.command("structure")
+def audio_structure(pilot: bool = PILOT):
+    """Segment boundaries + repetition labels from the stored features."""
+    from kata.audio import pipeline as ap
+    _run("audio-structure", ap.structure, pilot=pilot)
+
+
+@audio.command("sync")
+def audio_sync(pilot: bool = PILOT):
+    """Map <-> audio lag and map-grid vs. audio-beat agreement per difficulty."""
+    from kata.audio import pipeline as ap
+    _run("audio-sync", ap.sync, pilot=pilot)
+
+
+@audio.command("stats")
+def audio_stats(pilot: bool = PILOT):
+    """Train-split normalisation statistics -> features/v1/stats.json."""
+    from kata.audio import pipeline as ap
+    _run("audio-stats", ap.stats, pilot=pilot)
+
+
+@audio.command("report")
+def audio_report(name: str = typer.Option("phase2", help="Report file name prefix.")):
+    from kata.audio import pipeline as ap
+    _run("audio-report", ap.report, name=name)
+
+
+@audio.command("pilot")
+def audio_pilot():
+    """Run every Phase 2 stage on the pilot subset, then write the pilot report."""
+    from kata.audio import pipeline as ap
+    for stage, fn, kwargs in ap.PILOT_STAGES:
         _run(stage, fn, **kwargs)

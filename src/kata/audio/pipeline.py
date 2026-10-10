@@ -226,3 +226,20 @@ def _stats(paths, state, summary, pilot=False):
     summary.update(n_songs=len(shas), path=str(store.stats_path))
 
 stats = _with_state("audio-stats", _stats)
+
+
+# --------------------------------------------------------------------------- report
+
+def _report(paths, state, summary, name="phase2"):
+    from kata.audio.report import write_report
+    summary["path"] = str(write_report(paths, state, name))
+
+report = _with_state("audio-report", _report)
+
+PILOT_STAGES = [
+    ("audio-features", features, {"pilot": True}),
+    ("audio-structure", structure, {"pilot": True}),
+    ("audio-sync", sync, {"pilot": True}),
+    ("audio-stats", stats, {"pilot": True}),
+    ("audio-report", report, {"name": "phase2-pilot"}),
+]
