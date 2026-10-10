@@ -26,8 +26,8 @@ Goal: a playability scorer and a baseline mapper to beat.
 - Parity, vision-block, reset, swing-angle and speed checks
 - Simple onset + parity-aware pattern generator
 - Export to map files, preview in ArcViewer
-  📝 Design doc: docs/phases/phase-3-validator.md (draft 2026-10-10,
-  awaiting review).
+  📝 Design doc: docs/phases/phase-3-validator.md (approved 2026-10-10);
+  plan: docs/phases/phase-3-validator-plan.md (awaiting review).
 
 ## Phase 4 — Motion model
 Goal: generate plausible hand trajectories from music.

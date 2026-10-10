@@ -1,7 +1,7 @@
 # Phase 3 — Validator + rule-based baseline
 
-Status: **DRAFT 2026-10-10, awaiting review.** Design agreed section by
-section in conversation; this doc writes it down. Nothing is implemented yet.
+Status: **APPROVED 2026-10-10.** Prototype corrections in §17.
+Implementation plan: docs/phases/phase-3-validator-plan.md.
 Last updated: 2026-10-10
 
 ## 0. Summary
@@ -150,11 +150,12 @@ All rules read the swing table; the baseline mapper builds on the same code.
 
 Notes are sorted by `time_s`. A note joins the current swing if it arrives
 within **70 ms** of the previous note of that colour (MapCheck's window;
-JoshaParity uses 59 ms) **[tune in pilot: 59 vs. 70 ms]**. Otherwise it
-starts a new swing.
+JoshaParity uses 59 ms), **unless** it comes more than 5 ms later with an
+arrow at least 90° away from one already in the swing. That is a fast stream,
+not a slider, and starts a new swing (MapCheck's split rule; §17).
 
-Joining is unconditional. No hand can make two separate swings in 70 ms, so a
-merged swing whose arrows disagree is a rule issue (H3/E3), never two swings.
+Same-time arrows (within 5 ms) always stay in one swing, so a stack or
+window whose arrows disagree is a rule issue (H3/E3), never two swings.
 
 Each swing records:
 
@@ -179,14 +180,17 @@ swing):
 - **Wrist limits**: rotations outside the hand's range are infeasible. Red
   −155° … +195°, blue −195° … +155° (MapCheck, §16 [12]; consistent with
   ScoreSaber's pronation 90–100° / supination 180–210°, §16 [14]).
+- **Rotation change**: `w_rot · (Δρ / 180)²` between consecutive swings,
+  `w_rot = 1`. A change of 180° or more also costs `w_unjust`.
 - **Resets**: two consecutive swings of one hand with the same parity cost
   `w_unjust = 10` unless justified; a justified reset costs `w_slow = 0.5`
   (slow) or 0 (bomb) **[tune in pilot]**.
-- **Bombs** (bs-parity and MapCheck rule, §16 [2, 4, 12]): a bomb in the
-  hand's own middle column (x = 1 for red, x = 2 for blue), top or bottom
-  row, within ¼ beat before a swing, forces that swing's orientation. A
-  bottom bomb lifts the hand over it, so the next swing is a forehand
-  (downward); a top bomb forces a backhand.
+- **Bombs** (bs-parity and MapCheck rule, §16 [2, 4, 12]): the last bomb in
+  the hand's own middle column (x = 1 for red, x = 2 for blue), top or bottom
+  row, **between the hand's previous swing and this one**, forces this
+  swing's orientation. A bottom bomb lifts the hand over it, so the next
+  swing is a forehand (downward); a top bomb forces a backhand. (bs-parity's
+  ¼ beat is a skip condition, not the window; §17.)
 
 This is the approach of BeatLeader's analyser (§16 [19]), not BeatSaver's
 greedy checker. It reads a map **charitably**, the way an expert would play
@@ -194,8 +198,16 @@ it, so an ambiguous dot never creates a false error.
 
 **Reset labels.** After the DP, each same-parity pair is labelled:
 - `bomb`: forced by a bomb (legitimate);
-- `slow`: Δt ≥ `T_reset`, initially **1.0 s** **[tune in pilot on Tier A]**;
+- `slow`: the gap from the previous swing's end is at least `T_reset`;
 - `unjustified`: anything else. This is a parity error (E1).
+
+`T_reset` depends on the difficulty label: the 5th percentile, over all Tier
+A difficulties, of the gap between consecutive same-hand down-arrows
+(measured 2026-10-10, §17):
+
+| Easy | Normal | Hard | Expert | Expert+ |
+|------|--------|------|--------|---------|
+| 0.60 s | 0.47 s | 0.36 s | 0.30 s | 0.20 s |
 
 ### 3.4 Reaction time
 
@@ -217,14 +229,14 @@ reaction_time_s = hjd * 60 / bpm
 
 | Id | Rule | Definition | Kind |
 |----|------|------------|------|
-| H1 | Overlap | Two objects (notes or bombs) in the same cell whose depth separation `Δt · NJS` is < 0.5 m (BL R3A, §16 [15]) | **hard** |
+| H1 | Overlap | In one cell: a note and another object (note or bomb) whose depth separation `Δt · NJS` is < 0.5 m (BL R3A, §16 [15]); or two bombs less than 20 ms apart (ScoreSaber; bomb tunnels are legal, §17). NJS 0 means the game's default for the label | **hard** |
 | H2 | Note in wall | A note whose cell and time fall inside a wall's span (cells `x … x+w−1`, rows `y … y+h−1` clipped to 0–2, time `[t, t+duration]`). Walls with width or duration ≤ 0 are ignored (BL R3A, SS) | **hard** |
 | H3 | Impossible swing | One swing with `spread ≥ 90°` | **hard** |
-| E1 | Parity break | An `unjustified` reset, or a rebound: rotation change > 270° between consecutive swings (JoshaParity, §16 [5]) | error |
+| E1 | Parity break | An `unjustified` reset; or a rotation change of 180° or more between consecutive swings (BL AutoModder's parity-warning angle, §16 [9]); or an inverted swing, \|ρ\| > 135° (AutoModder, §16 [9]). See §17 for why this replaces JoshaParity's > 270° | error |
 | E2 | Vision block | **Blocker**: a note or bomb at x ∈ {1, 2}, y = 1. **Blocked**: a later note on the blocker's half (x ≤ 1 for a blocker at x = 1, x ≥ 2 for x = 2), not in the same swing, arriving within `(t_min, t_max]` of the blocker. `t_max = min(reaction_time_s, cap)`. Bomb blockers use `t_min = 200 ms` (BL AutoModder, §16 [9, 16]) | error |
 | E3 | Swing spread | `45° < spread < 90°` within one swing (SS same-snap rule, BL R4) | error |
 | L1 | Speed | Per swing, `v = (1 + d) / Δt`, where `d` is the grid distance from the previous same-hand swing's exit to this swing's entry and `Δt` is start to start. Metric: the peak, over the map, of mean `v` across any 8 consecutive swings of one hand (a sustained-burst measure, after BL's pass rating, §16 [19]) | load |
-| L2 | Angle strain | Per swing, `(Δρ / 180)²`, where Δρ is the rotation change from that hand's previous swing (BL tech rating, §16 [19]). Metric: p95 over swings | load |
+| L2 | Angle strain | Per swing, `(Δρ / 180)²`, where Δρ is the rotation change from that hand's previous swing (BL tech rating, §16 [19]). Metric: the mean of the top 5 % of swings (at least one). A p95 collapsed onto the 45° steps, §17 | load |
 | L3 | Reset density | `bomb` + `slow` resets per minute of mapped time | load |
 
 **E2 windows by difficulty** (seconds, MapCheck, §16 [10]):
@@ -310,9 +322,9 @@ regardless (D6), so Phase 5 can rank failed attempts.
 ### 5.5 Public interface
 
 ```python
-validate(notes, bombs, walls, chains, *, difficulty, njs, njs_offset, bpm,
+validate(MapInput(difficulty, njs, njs_offset, bpm, notes, bombs, walls, chains),
          reference) -> Result
-# Result: pass_, score, sub_scores{rule: s}, metrics{rule: m}, stratum,
+# Result: passed, score, sub_scores{rule: s}, metrics{rule: m}, stratum,
 #         swings (DataFrame), issues (DataFrame), local (DataFrame)
 ```
 
@@ -371,18 +383,27 @@ has exactly one known defect.
 
 | Id | Corruption | Expected rule |
 |----|------------|---------------|
-| C1 | Rotate one arrow by 180° in a swing whose Δt to the hand's neighbouring swings is < `T_reset` | E1 |
+| C1 | Rotate the arrow of a single-note swing by 180°, where the gaps to the hand's neighbouring swings are both < `T_reset` | E1 |
 | C2 | Insert a bomb at (1 or 2, 1), middle row, 250 ms before a note on the same half. Middle-row bombs do not affect parity (§3.3) | E2 |
-| C3 | Duplicate a note as a bomb in the same cell, 10 ms later | H1 |
-| C4 | Time-compress 8 consecutive swings of one hand by 2× towards the first of them | L1 |
-| C5 | Rotate the arrows of 4 consecutive swings of one hand by 90° | L2 (and E1 where parity breaks) |
-| C6 | Rotate one arrow in a multi-note swing by 90° / by 60° | H3 / E3 |
+| C3 | Duplicate an outer-lane note as a bomb in the same cell, 10 ms later | H1 |
+| C4 | Time-compress a random 8-swing run of one hand until its mean speed is 1.5× the stratum's L1 q99. Runs that are already that fast, or whose gaps would shrink below 75 ms (slider range), are not eligible | L1 |
+| C5 | Zig-zag the arrows of 4 consecutive single-arrow swings of one hand: +90°, −90°, +90°, −90° | L2 |
+| C6 | Rotate one arrow of a same-time stack or window by 90° | H3 |
+| C7 | Turn one arrow of a same-time stack or window by 60° (`angle_offset`) | E3 |
+
+C4 is sized from the reference because L1 only claims to flag runs beyond
+ranked maps' q99; a fixed 2× often stays inside that range (§17). C6/C7 use
+same-time swings only: under §3.2 a turned slider note becomes a separate
+swing.
 
 **Detection**:
 - **Hard and error rules**: an issue of the expected rule, on the same hand,
-  within ±1 swing of the injection.
+  within ±1 swing of the injection (for C4 and C5: up to the end of the
+  changed run).
 - **Load rules**: that rule's local sub-score (§5.3) drops below 0.5 in a
-  window containing the injection.
+  window containing the injection. For C5, L3 there or an E1 issue nearby
+  also counts: the DP reads a fast zig-zag as rotation strain or a parity
+  break, and a slower one as resets (§17).
 
 **False alarms**: issues in the corrupted copy that are absent from the clean
 original and not within ±1 swing of the injection, divided by the number of
@@ -406,25 +427,30 @@ sees a human map, matching what Phase 5 has at inference time.
 ### 8.1 Tempo grid
 
 1. Take Beat This beats `b_j` for the song. Assign integer beat indices
-   `k_j = round((b_j − b_0) / median_IBI)` so that missed beats leave gaps,
-   not shifts.
+   step by step: `k_j = k_{j−1} + max(1, round((b_j − b_{j−1}) / median_IBI))`,
+   so a missed beat leaves a gap. (Rounding `(b_j − b_0) / median_IBI`
+   instead drifts by whole beats over a long song; §17.)
 2. Fit `t = t0 + k · T` by least squares.
-3. If the p95 |residual| exceeds **15 ms** (unsteady tempo), fit
-   piecewise, one line per structure segment (`audio_segments`), with a
-   `bpmEvent` at each segment start **[verify in pilot how often]**.
-4. Map beat 0 is always audio time 0 in v3. A **lead-in segment** of
-   `⌈t0 / T⌉` beats with BPM `⌈t0/T⌉ · 60 / t0` ends exactly at `t0`, so
-   every fitted audio beat lands on an integer map beat.
+3. If the p95 |residual| exceeds **30 ms** (unsteady tempo), fit
+   piecewise, one line per structure segment (`audio_segments`; segments
+   with fewer than 4 beats merge into the next), with a `bpmEvent` wherever
+   the tempo changes. On 300 songs, 44 % are steady; Beat This's 20 ms
+   frames alone give 15–30 ms residuals on steady songs (§17).
+4. Map beat 0 is always audio time 0 in v3. Map beat 1 is the first fitted
+   audio beat at least half a period after time 0, so the **lead-in** (map
+   beats 0 → 1) lasts 0.5–1.5 periods and its BPM stays within ×0.67–×2 of
+   the main tempo. Every later fitted audio beat lands on an integer map
+   beat.
 5. The Info BPM is the fitted main tempo. Whether Beat This picked the half
-   or double tempo does not matter for placement (candidate slots are ¼ of a
-   fitted beat either way), but it sets the NJS/offset arithmetic, so it is
-   recorded.
+   or double tempo does not matter for placement, but it sets the NJS/offset
+   arithmetic, so it is recorded.
 
 ### 8.2 Note times
 
-1. **Candidate slots**: every ¼ fitted beat from the first to the last
-   detected onset, at least 1.5 s after the start and 2 s before the end
-   (BL setup rules, §16 [15]).
+1. **Candidate slots**: every ¼ fitted beat (every ⅛ when the fitted tempo is
+   below 110 BPM, so slow songs can reach Expert+ density) from the first to
+   the last slot whose strength is at least 0.2 × the maximum, at least 1.5 s
+   after the start and 2 s before the end (BL setup rules, §16 [15]).
 2. **Slot strength**: the per-song normalised (÷ p99) onset curves, combined
    as `1.0·drums + 0.5·mix + 0.3·(bass + other + vocals)`, max-pooled over
    ±30 ms around the slot **[tune in pilot]**. Multiplied by a loudness boost
@@ -433,16 +459,20 @@ sees a human map, matching what Phase 5 has at inference time.
 3. **Target count**: Tier A train's median NPS (§4.3 definition) for the
    requested label, times the mapped duration.
 4. **Selection**: greedy by strength, subject to a minimum gap between
-   consecutive notes of one hand: Tier A train's p5 same-hand swing interval
-   in the target stratum. The baseline is therefore never faster than ranked
-   maps.
+   consecutive notes of one hand: the median, over Tier A train maps in the
+   target stratum, of each map's 5th-percentile same-hand swing interval.
+   Since hands alternate, consecutive selected notes are at least half that
+   gap apart. The baseline is therefore never faster than a typical ranked
+   map.
 
 ### 8.3 Hands, directions, positions
 
-- **Hands** alternate by default. A slot that is a downbeat and whose
-  strength exceeds 2× the median strength of its neighbours within one beat
-  becomes a **double** (both hands), on Hard and above only, and only if
-  both hands are due the same parity.
+- **Hands** alternate by default. A slot within 30 ms of an audio downbeat
+  whose strength is at least 2× the median strength of the selected slots
+  becomes a **double** (both hands). Doubles happen on Hard and above only,
+  only if both hands are due the same parity, and only if both hands have
+  been free for the minimum gap and the next note is that far away. Doubles
+  never use crossovers, so the hands never share a cell.
 - **Directions**: each swing takes the parity opposite to that hand's
   previous swing (forehand ↔ backhand), via the validator's swing model. The
   angle is drawn from a small vocabulary: the straight direction, or a
@@ -450,12 +480,15 @@ sees a human map, matching what Phase 5 has at inference time.
 - **Positions**: a flow table.
   - Forehand (downward) swings land in row 0, or row 1 with probability 0.3.
   - Backhand (upward) swings land in row 2, or row 1 with probability 0.3.
-  - Red uses lanes 0–1, blue lanes 2–3. Crossovers (red into lane 2, blue
-    into lane 1) only on Expert and up, with probability 0.05.
-- **Self-check**: after each placement, the swing model and the per-swing
-  rules (E1–E3, H1–H3) run on the map so far. On any issue, the next
-  candidate (angle, then position) is tried. If none works, the slot is
-  dropped.
+  - Red uses lanes 0–1, blue lanes 2–3. Row 1 uses only the outer lane
+    (red 0, blue 3), so the baseline never places a vision blocker.
+  - Crossovers (red into lane 2, blue into lane 1, never in row 1) only on
+    Expert and up, with probability 0.05.
+- **Self-check**: the finished difficulty is validated. The notes of every
+  swing with a hard or error issue are dropped and the difficulty is
+  re-validated, up to 3 rounds. Alternation, the direction vocabulary and the
+  flow table make issues rare by construction, so a post-hoc repair replaces
+  the per-placement retry of the draft (§17).
 - **Deterministic**: seeded by `audio_sha256` and difficulty.
 - **No dots, bombs, walls, arcs, chains or deliberate resets** (D3).
 
@@ -527,12 +560,14 @@ $KATA_DATA/
   raw/maps/{hash}/                         # Tier D maps too (audio deleted)
   processed/
     lowrated/{maps,difficulties,notes,bombs,obstacles,arcs,chains,tempo_maps}.parquet
-    validation_swings.parquet              # one row per swing (§3.2 fields + parity, rotation, reset label)
-    validation.parquet                     # one row per difficulty (§5.5)
-    validation_issues.parquet              # hash, characteristic, difficulty, swing_idx, time_s, hand, rule, severity, value, threshold
-    validation_local.parquet               # hash, characteristic, difficulty, window_start_beat, score, s_<rule>
-    corruption_results.parquet             # difficulty, corruption, swing_idx, detected, false_alarms
-    baseline_eval.parquet                  # sha, difficulty, pass, score, stratum, timing_f
+    validation_metrics.parquet             # one row per difficulty: tier, split, year, status, every rule metric, nps, njs, reaction time
+    validation_swings.parquet              # one row per swing (§3.2 fields + parity, rotation, reset label, speed, strain)
+    validation_issues.parquet              # hash, characteristic, difficulty, rule, severity, hand, swing_idx, time_s, value, threshold
+    validation_local_metrics.parquet       # per window: hash, characteristic, difficulty, window_start_beat, n_swings, rule metrics
+    validation.parquet                     # validation_metrics + stratum, s_<rule>, score, pass, validator_version (§5.5)
+    validation_local.parquet               # validation_local_metrics + stratum, s_<rule>, score
+    corruption_results.parquet             # hash, characteristic, difficulty, corruption, rule, i, eligible, detected, false_alarms, n_swings
+    baseline_eval.parquet                  # audio_sha256, split, difficulty, n_notes, nps, pass, score, stratum, s_<rule>, timing_f, grid_bpm, piecewise, round_trip
   validator/
     v1/
       config.json                          # every parameter in §3–§5, plus rule list and weights
@@ -561,42 +596,50 @@ DuckDB for tables, the stdlib for the PNG cover. All CPU.
 
 ```
 src/kata/validate/
-  swings.py      # canonical frames → per-hand swing table; DP orientation (§3)
-  rules.py       # one function per rule: swings + objects → issues (§4.1)
-  reference.py   # NPS, strata, Tier A train quantiles, reference.json (§4.2–4.3)
-  score.py       # sub-scores, geometric mean, gate, local scores, validate() (§5)
-  corrupt.py     # C1–C6 with injected-issue ground truth (§6.3)
-  pipeline.py    # stages below, resumable via kata.data.state.State
+  swings.py      # notes → per-hand swings; DP orientation (§3)
+  rules.py       # MapInput, analyse(): swing table, issues, per-map and per-window metrics (§4, §5.3)
+  reference.py   # strata, Tier A train quantiles, reference.json, pinned config.json (§4.2–4.3)
+  score.py       # sub-scores, geometric mean, gate, validate() (§5)
+  corrupt.py     # C1–C7 with injected-issue ground truth (§6.3)
+  pipeline.py    # stages below
   report.py
 src/kata/baseline/
-  grid.py        # tempo fit → bpmEvents, lead-in (§8.1)
+  grid.py        # tempo fit → bpmEvents, lead-in, slots (§8.1)
   onsets.py      # slot strengths, greedy selection (§8.2)
-  patterns.py    # hands, directions, positions, self-check (§8.3)
+  patterns.py    # hands, directions, positions (§8.3)
+  generate.py    # one song → five validated difficulties, repair (§8)
   export.py      # Info.dat, v3 .dat, cover, zip, round trip (§8.5)
-cli.py           # `kata validate <stage>`, `kata baseline <stage>`
+  pipeline.py    # `generate` stage (§8.6)
+src/kata/data/lowrated.py   # Tier D select / download / parse (§6.1)
+cli.py           # `kata validate <stage>`, `kata baseline generate`, `kata data *-lowrated`
 ```
 
-Phase 1 changes: a `select-lowrated` stage (Tier D rule and year-matched
-sample), an audio-dropping option in extraction, and a `lowrated` output
-directory for `parse-maps`. `Paths` gains `validator` and `generated`.
-Nothing else in Phases 1 and 2 changes.
+Phase 1 changes: extraction can drop audio; the catalogue filter and the map
+parser are factored out (`_filter_catalog`, `_parse_selection`) so Tier D
+reuses them with identical output for Tiers A–C (checked on real maps, §17);
+`build` adds `lowrated_*` views. `Paths` gains `lowrated`, `validator` and
+`generated`. Nothing else in Phases 1 and 2 changes.
 
-**Stages** (each idempotent and resumable through `state/pipeline.duckdb`):
+**Stages** (each idempotent: download is resumable through
+`state/pipeline.duckdb`, the others rebuild their tables deterministically):
 
 1. `kata data select-lowrated` → `download-lowrated` → `parse-lowrated`.
    **Checkpoint: show you the Tier D year mix and parse results.**
-2. `kata validate swings` → `validation_swings` for Tiers A, B, C, D.
+2. `kata validate analyse` → `validation_metrics`, `validation_swings`,
+   `validation_issues`, `validation_local_metrics` for Tiers A–D (85 s for
+   all 15.4k difficulties, §17).
 3. `kata validate reference` → `validator/v1/reference.json` (Tier A train
    only).
-4. `kata validate score` → `validation`, `validation_issues`,
-   `validation_local`.
+4. `kata validate score` → `validation`, `validation_local`.
 5. `kata validate corrupt` → `corruption_results`.
 6. `kata baseline generate` → map folders and zips for val + test songs;
    `baseline_eval`.
 7. `kata validate report` → `reports/phase3-YYYY-MM-DD.md`.
 
-**Pilot first**, as in Phases 1 and 2: the whole chain on the Phase 1 pilot
-subset (~200 maps) plus 200 Tier D maps. The pilot:
+**Pilot first**, as in Phases 1 and 2: `kata validate pilot` runs the whole
+chain with 200 Tier D maps, corruptions on 100 Tier A val/test difficulties
+and the baseline on the pilot's val/test songs. Analysis always covers every
+parsed difficulty, because it is cheap. The pilot:
 - resolves every **[verify in pilot]** item and tunes every
   **[tune in pilot]** value, on Tier A train and Tier D fit only;
 - shows per-rule AUCs and the score distributions per tier;
@@ -617,7 +660,7 @@ The full run starts only after you've seen the pilot report.
 - `reference` / `score`: anchor maths (1.0 at q90, 0.5 at q99, 0 at the
   extrapolated point); collapsed-anchor spacing; the 0.01 floor; stratum
   merging and fallback; local windows skip below 8 swings.
-- `corrupt`: each of C1–C6 on a clean fixture is detected at the injected
+- `corrupt`: each of C1–C7 on a clean fixture is detected at the injected
   swing, with zero false alarms.
 - `baseline`: the tempo fit recovers a synthetic click track's BPM and
   phase within 1 ms, including the lead-in; the minimum-gap rule holds;
@@ -640,12 +683,17 @@ hand. Expected minutes per stage with 8 workers **[verify in pilot]**.
    and D difficulties, or a recorded failure reason.
 3. **Gate**: ≥ 99 % of Tier A val + test difficulties pass.
 4. **Separation**: score AUC, Tier A val + test vs. Tier D holdout,
-   ≥ **0.85** overall. Also reported **per stratum** of upload year ×
-   difficulty label × NPS band, for every stratum with ≥ 30 maps on each
-   side; the size-weighted mean of those per-stratum AUCs must be ≥ **0.80**
-   **[tune in pilot]**. Era and density cannot fake this criterion.
-5. **Corruptions**: each of C1–C6 is detected in ≥ 95 % of injections, with
-   false alarms ≤ 1 % of swings.
+   ≥ **0.85** overall. Also reported **per stratum** of upload year (≤ 2019,
+   2020–21, 2022–23, ≥ 2024) × NPS (0–4, 4–6, 6–8, 8+), for every cell with
+   ≥ 20 maps on each side; the size-weighted mean of those per-cell AUCs must
+   be ≥ **0.80** **[tune in pilot]**. Era and density cannot fake this
+   criterion. (The difficulty label is not a stratum dimension: with ~700
+   Tier A val/test difficulties, cells would be too thin, and load rules are
+   already label-referenced. Per-label AUC is reported separately; §17.)
+5. **Corruptions**: each of C1–C7 is detected in ≥ 95 % of eligible
+   injections, with false alarms ≤ 1 % of swings. The prototype measured
+   C1 at 92 % and C5 at 82 % (§17); the pilot either finds the cause or
+   proposes a different bar to you.
 6. **Baseline**:
    - 100 % of generated difficulties pass the gate;
    - the median score per difficulty is at or above Tier A's q10 for the
@@ -704,7 +752,7 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | Validator encodes Tier A style | Novel playable patterns penalised; Phase 5/6 pushed towards conformity | Load rules one-sided; error rules limited to clear errors; charitable DP; §12 states the limit |
 | Goodhart: the baseline uses the validator in its own loop | Baseline score is not independent evidence | Timing agreement and manual preview are the independent checks (§8.6) |
 | Thin strata (rare label × NPS combinations) | Noisy reference quantiles | Merge rule with a 100-map minimum and a label fallback (§4.3) |
-| 70 ms merge window wrong for very fast streams | Real swings merged, or splits missed | Pilot compares 59 and 70 ms on Tier A gate pass rate and corruption recall |
+| 70 ms merge window wrong for very fast streams | Real swings merged, or splits missed | Measured: same-colour note gaps have a valley at 50–70 ms in Tier A; fast streams split by the 90° rule (§3.2, §17) |
 | Older Tier D maps hit new format edge cases | Parse failures | Phase 1's parser already rejects with reasons; criterion 1 allows 1 % |
 | Beat This picks half or double tempo | Odd Info BPM in baseline maps | Placement is unaffected (§8.1 step 5); NJS/offset use the recorded level |
 
@@ -724,6 +772,7 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-10 | D8 | Export v3.2.0 difficulties + v2.1.0 Info.dat, folder + zip |
 | 2026-10-10 | — | Local score windows use 16 map beats, not 4 audio bars: Tier D has no audio features |
 | 2026-10-10 | — | Per-stratum AUC gets a floor (size-weighted mean ≥ 0.80) in addition to the overall 0.85 |
+| 2026-10-10 | — | Spec approved. Prototype corrections to §3.2, §3.3, §4.1, §6.3, §8.1–8.3, §9–§11 (§17) |
 
 ---
 
@@ -755,3 +804,77 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 24. BSMG map format: https://github.com/bsmg/wiki/blob/master/wiki/mapping/map-format.md
 25. BeatSaver Info v2 schema: https://github.com/beatmaps-io/beatsaver-common-mp/blob/master/src/jvmMain/kotlin/io/beatmaps/common/beatsaber/info/infoSchema2.kt
 26. BeatSaver v3 validation: https://github.com/beatmaps-io/beatsaver-common-mp/blob/master/src/jvmMain/kotlin/io/beatmaps/common/beatsaber/map/mapValidation3.kt
+
+---
+
+## 17. Prototype findings (2026-10-10)
+
+Every module in the implementation plan was prototyped in a throwaway
+worktree and its tests run (134 passing, including the Phase 1 and 2 suites)
+before the plan was written. The whole stage chain then ran on the real
+dataset in a scratch data root, with Tier C standing in for Tier D (no
+download). Corrections made to this doc as a result:
+
+**Swing model and rules**
+- **Merge window (§3.2).** Same-colour note gaps in Tier A have a clear
+  valley at 50–70 ms (sliders below, separate swings above), so 70 ms
+  stays. About 4.7k Tier A note pairs are 60–69 ms apart with *different*
+  arrows: fast streams. An unconditional merge flagged them as H3, hence
+  MapCheck's 90° split rule.
+- **Reset time (§3.3).** One 1.0 s threshold made the DP read Normal-level
+  down-down pairs 0.96 s apart as upside-down hits. Tier A's 5th percentile
+  of same-hand down-arrow gaps runs from 0.60 s (Easy) to 0.20 s (Expert+),
+  so `T_reset` is per label.
+- **Bomb resets (§3.3).** bs-parity's ¼ beat is a skip condition, not a
+  window: a reset bomb usually sits half a beat before the swing.
+- **H1 (§4.1).** 98.7 % of 600 Tier A difficulties passed the gate; every
+  failure was a bomb–bomb pair in a bomb tunnel. With ScoreSaber's 20 ms
+  rule for bomb pairs: 99.7 %.
+- **E1 (§4.1).** With only "unjustified reset or > 270°", flipped diagonal
+  and horizontal arrows went undetected: the charitable DP explains them as
+  upside-down hits. Rotation changes ≥ 180° are 0.055 % of Tier A swings
+  and 0.72 % of Tier C swings (13×); |ρ| > 135° is AutoModder's
+  inverted swing. Both now count. E1's AUC (Tier A vs. C) rose from 0.52 to
+  0.67, and C1 recall from 66 % to 92 %.
+- **L2 (§4.1).** Strain values sit on 45° steps, so a p95 gave q90 = q99 =
+  0.25 and collapsed anchors. The mean of the top 5 % is continuous.
+
+**Calibration (§6.3, §11)**
+- **C4** at a fixed 2× was detected 33 % of the time: often the doubled run
+  is still within ranked maps' range, which L1 does not claim to flag.
+  Sized from the reference (1.5× the stratum's q99): 100 %, but only
+  ~20 % of runs are eligible (the rest would shrink into slider range).
+- **C5** (a +90° turn of 4 swings) was detected 11 % of the time. As a
+  ±90° zig-zag: 60 %. Counting L3 and E1 as well: 72–82 %. The DP reads a
+  slower zig-zag as three resets: defensible, and visible in L3, not L2.
+- **Per-stratum AUC (criterion 4).** With label × year × NPS, almost no cell
+  reaches 20 Tier A val/test maps. The label is dropped from the cells and
+  reported on its own.
+
+**Baseline (§8)**
+- **Beat indices (§8.1).** Rounding `(b − b0) / IBI` gave a median p95
+  residual of 200 ms on 300 songs: the indices drift by whole beats. Step-by-
+  step rounding: 44 % of songs fit one line within 30 ms; the rest have real
+  tempo changes or half-time sections and are fitted per segment.
+- **Slow songs (§8.2).** At 80 BPM, ¼-beat slots cap Expert+ at 5.3 NPS
+  (Expert and Expert+ came out identical). ⅛ slots below 110 BPM fix it.
+- **Doubles (§8.3).** A neighbour median that includes the slot itself can
+  never be exceeded 2× with one neighbour; a song-level median works. A
+  double combined with a crossover put both hands in one cell (H1).
+
+**Measurements**
+
+| Item | Result |
+|------|--------|
+| `analyse` per difficulty | median 26 ms, max 68 ms (30 Tier A diffs; criterion 8: < 100 ms) |
+| `analyse`, all 15,442 difficulties | 85 s, 0 errors (8 workers) |
+| Gate, Tier A | 99.5 % (val+test 99.7 %); Tier B 98.9 %; Tier C 91.9 % |
+| Score AUC, Tier A val+test vs. Tier C | 0.78–0.80; per rule E1 0.67, E2 0.60, E3 0.50, L1 0.56–0.58, L2 0.64–0.68, L3 0.69–0.73 |
+| Corruption recall (100 Tier A val/test diffs) | C1 92 %, C2 100 %, C3 100 %, C4 100 %, C5 82 %, C6 100 %, C7 100 %; false alarms ≤ 0.01 % of swings |
+| BeatSaver parity agreement (v2) | Tier A: BeatSaver errors 24.6 %, our E1 5.7 %, agreement 80 % |
+| Tier D selection | pool 5,676 maps → 2,000 sampled, 2,568 difficulties; 2022–2025 fully used, so the sample stays older than Tier A |
+| Baseline | ~0.3 s per song for 5 difficulties; pilot val/test: 15 songs, 100 % pass and round trip; median timing F 0.25 (Easy) – 0.50 (Expert+) |
+| Refactored Phase 1 parser | byte-identical output on 22 real maps |
+
+Tier C is not Tier D: it is the unranked difficulties of ranked maps. Real
+Tier D numbers come from the pilot.
