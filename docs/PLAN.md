@@ -21,13 +21,14 @@ Goal: precomputed, cached conditioning features per song.
   📝 Design doc: docs/phases/phase-2-audio.md (approved 2026-10-09; v1
   built 2026-10-10: 5,347 songs, 81 GB, results in §19).
 
-## Phase 3 — Validator + rule-based baseline
+## Phase 3 — Validator + rule-based baseline ✅
 Goal: a playability scorer and a baseline mapper to beat.
 - Parity, vision-block, reset, swing-angle and speed checks
 - Simple onset + parity-aware pattern generator
 - Export to map files, preview in ArcViewer
-  📝 Design doc: docs/phases/phase-3-validator.md (approved 2026-10-10);
-  plan: docs/phases/phase-3-validator-plan.md (awaiting review).
+  📝 Design doc: docs/phases/phase-3-validator.md (approved 2026-10-10;
+  v1 built 2026-10-11: AUC 0.881 vs. low-rated maps (0.872 per stratum),
+  gate 99.7 % on ranked val/test, baseline 100 % pass on 506 songs; §19).
 
 ## Phase 4 — Motion model
 Goal: generate plausible hand trajectories from music.

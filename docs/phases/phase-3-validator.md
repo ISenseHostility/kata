@@ -1,6 +1,8 @@
 # Phase 3 — Validator + rule-based baseline
 
-Status: **APPROVED 2026-10-10.** Prototype corrections in §17; pilot findings in §18.
+Status: **DONE 2026-10-11.** v1 validator and baseline built; every
+acceptance criterion met (§19). Prototype corrections in §17; pilot findings
+in §18.
 Implementation plan: docs/phases/phase-3-validator-plan.md.
 Last updated: 2026-10-11
 
@@ -962,3 +964,61 @@ below use the tuning halves only.
 3. **No threshold or weight changes.** On the tuning halves, 0.897 overall and
    0.870 per stratum already clear the 0.85 / 0.80 bars. The per-stratum
    criterion can only be judged on the full Tier D sample (Task 11).
+
+---
+
+## 19. v1 build results (2026-10-11)
+
+Report: `E:\kata-data\reports\phase3-2026-10-11.md`. Validator `v1`; the
+pilot's approved changes (§15) were applied first.
+
+**Run**
+- **Tier D**: 2,000 / 2,000 maps downloaded (1,800 new, 375 s, 0 errors) and
+  parsed (5 s). 2,550 of 2,568 difficulties parse (99.3 %); the 18 rejected
+  have no recognisable format version. Calibration halves: 986 fit maps,
+  1,014 holdout.
+- **Audio**: the download left three `.mp3` source files that mappers had
+  left in their zips. The audio drop only knew `.egg`, `.ogg` and `.wav`.
+  It now also drops `.mp3`, `.flac`, `.m4a` and `.opus`, and the three files
+  were deleted. No audio remains in Tier D.
+- **Disk**: Tier D is 541 MB (524 MB raw `.dat` + 17 MB tables). The
+  baseline is 7.1 GB, mostly copied audio. E: has 244 GB free.
+- **Stage timings**: `analyse` 106 s for 17,732 difficulties, `reference`
+  0.1 s, `score` 0.8 s, `corrupt` 155 s for 19,698 injections, `baseline
+  generate` 41 s for 506 songs.
+
+**Acceptance (§11)**
+
+| # | Criterion | Result |
+|---|-----------|--------|
+| 1 | Tier D: ≥ 1,900 / 2,000 maps, ≥ 99 % of diffs parse, no audio, < 1 GB, year mix | 2,000 maps; **99.3 %** of diffs; 0 audio files; 541 MB; year mix next to Tier A's share in report §2 |
+| 2 | Coverage of parsed A–D difficulties | 17,732 / 17,732 (A 7,463, B 7,459, C 260, D 2,550), 0 errors |
+| 3 | Gate: ≥ 99 % of Tier A val+test pass | **99.7 %** (697 diffs) |
+| 4 | AUC, Tier A val+test vs. Tier D holdout: ≥ 0.85 overall, ≥ 0.80 per stratum | overall **0.881** (697 vs. 1,289); per stratum **0.872** over 11 cells (range 0.796–0.937) |
+| 5 | Corruptions: C2–C7 ≥ 95 %, C1 ≥ 90 %, false alarms ≤ 1 % | C1 **91.6 %**, C2 99.4 %, C3 100 %, C4 100 %, C5 99.2 %, C6 100 %, C7 100 %; false alarms ≤ 0.010 % of swings |
+| 6 | Baseline: 100 % pass, median ≥ Tier A q10, 100 % round trip, timing reported | 506 songs × 5: 100 % pass; median 100 in every label (Tier A q10 92.5–95.8); 100 % round trip; median timing F 0.47–0.60 |
+| 7 | 5 pilot zips play in ArcViewer | passed (your check, 2026-10-11) |
+| 8 | `validate()` on Expert+ < 100 ms median | median **47–49 ms**, p90 92–97 ms, max 122–146 ms (60 diffs, two runs) |
+| 9 | Reference from Tier A train only; pilot tuning on train + fit | `reference.json` n_maps 6,766 = Tier A train (`test_stages_end_to_end` checks it); pilot report compared train vs. fit only. See note |
+| 10 | Re-running a stage is a no-op or rebuilds identical tables | `analyse`, `reference`, `score` re-run: all six `validation*` tables and `config.json` / `reference.json` byte-identical (sha256) |
+| 11 | Report contents | all present: funnel and year mix (§2), score per tier and per stratum (§3), AUCs (§4), corruptions (§5), baseline (§6), parity agreement (§7), timings (§1) |
+
+**Notes on the criteria**
+- **Criterion 4.** One cell is below 0.80: 2022–23 × 6–8 NPS has 0.796
+  (60 vs. 28 maps). The criterion is the size-weighted mean, not every
+  cell. Per label: Easy 0.95, Normal 0.92, Hard 0.94, Expert 0.92,
+  Expert+ 0.82. Per rule: E1 0.76, E2 0.78, E3 0.50, L1 0.58, L2 0.72,
+  L3 0.74.
+- **Criterion 9.** The first pilot report showed the held-out comparison
+  (AUC 0.915, per stratum 0.877 over one cell) before the report was fixed
+  (§18). Nothing was tuned on it, and the approved changes touch only the
+  corruption harness and the C1 bar, not the validator.
+- **Criterion 1.** The three `.mp3` files are described under Run.
+
+**Compared with the pilot**
+- Tier D gate pass is 74.9 % on all 2,550 difficulties. On the 117 pilot
+  fit difficulties it was 91.5 %. Tier D median score is 71.5 (pilot 65.7).
+- C5 recall went from 80.6 % to 99.2 % with fast-only eligibility, as the
+  pilot measured (99.5 %). C1 stays at 92 %.
+- Baseline timing F went up (0.47–0.60, pilot 0.25–0.50) on 506 songs
+  instead of 15.
