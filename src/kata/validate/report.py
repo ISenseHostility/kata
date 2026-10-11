@@ -85,7 +85,9 @@ def write_report(paths: Paths, state, name: str, calibration: str = "holdout") -
     last = {r["stage"]: json.loads(r["summary"] or "{}") for r in runs.iter_rows(named=True)}
     if "select-lowrated" in last:
         years = last["select-lowrated"].get("years", {})
+        funnel = last["select-lowrated"].get("funnel", {})
         out += ["## 2. Tier D sample", "",
+                md_table(pl.DataFrame({"step": list(funnel), "maps": list(funnel.values())})) if funnel else "", "",
                 f"- Pool {last['select-lowrated'].get('pool_maps')} maps, sampled "
                 f"{last['select-lowrated'].get('sampled_maps')} ({last['select-lowrated'].get('sampled_diffs')} diffs)", "",
                 md_table(pl.DataFrame([{"year": y, **v} for y, v in years.items()])) if years else "", ""]
@@ -99,7 +101,13 @@ def write_report(paths: Paths, state, name: str, calibration: str = "holdout") -
     out += ["## 3. Gate and score per tier", "", md_table(v.group_by("tier").agg(
         pl.len().alias("n"), pl.col("pass").mean().alias("pass_rate"),
         pl.col("score").quantile(0.1).alias("q10"), pl.col("score").median().alias("median"),
-        *(pl.col(f"s_{r}").mean().alias(f"mean_s_{r}") for r in SCORED_RULES)).sort("tier")), ""]
+        *(pl.col(f"s_{r}").mean().alias(f"mean_s_{r}") for r in SCORED_RULES)).sort("tier")), "",
+            "Score per stratum (difficulty label × NPS band):", "", md_table(v.with_columns(
+                pl.col("stratum").str.split_exact("|", 1).struct.rename_fields(["label", "nps_band"]))
+                .unnest("stratum").group_by("label", "nps_band", "tier").agg(
+                pl.len().alias("n"), pl.col("pass").mean().alias("pass_rate"),
+                *(pl.col("score").quantile(q).alias(f"q{round(q * 100)}") for q in (0.1, 0.5, 0.9)))
+                .sort("label", "nps_band", "tier")), ""]
 
     in_a = (pl.col("tier") == "A") & pl.col("split").is_in(list(a_splits))
     in_d = (pl.col("tier") == "D") & (pl.col("split") == d_split)

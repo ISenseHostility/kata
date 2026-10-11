@@ -106,3 +106,20 @@ def test_pilot_report_separates_the_tuning_halves_not_the_held_out_ones(paths):
     assert "Tier A train vs. Tier D fit" in tuning and "(A 12, D 1)" in tuning
     assert "holdout" not in tuning
     assert "| D | 1 |" in tuning and "| A | 12 |" in tuning     # per-tier table: tuning halves only
+
+
+def test_report_shows_the_tier_d_funnel_and_score_distributions_per_stratum(paths):
+    from kata.data.state import State
+    state = State(paths.state_db)
+    with state.run("select-lowrated") as s:
+        s.update({"funnel": {"catalog_maps": 900, "not_automapper": 800}, "pool_maps": 50,
+                  "sampled_maps": 3, "sampled_diffs": 3, "years": {}})
+    state.close()
+    vp.analyse_stage(paths)
+    vp.reference_stage(paths)
+    vp.score_stage(paths)
+    text = open(vp.report_stage(paths, name="t")["path"], encoding="utf-8").read()
+    assert "| catalog_maps | 900 |" in text and "| not_automapper | 800 |" in text
+    assert "Score per stratum" in text
+    label, band = pl.read_parquet(paths.processed / "validation.parquet")["stratum"][0].split("|")
+    assert f"| {label} | {band} | A |" in text and f"| {label} | {band} | D |" in text
