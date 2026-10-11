@@ -10,13 +10,15 @@ import numpy as np
 import polars as pl
 
 from kata.validate import rules
-from kata.validate.rules import ERROR_RULES, LABELS, LOAD_RULES
+from kata.validate.rules import ERROR_RULES, HARD_RULES, LABELS, LOAD_RULES
 from kata.validate.swings import ROT_RANGE, T_RESET_S, SwingParams
 
 VALIDATOR_VERSION = "v1"
 NPS_BAND = 2.0
 MIN_STRATUM_MAPS = 100
 ERROR_Q90_MIN, ERROR_Q99_GAP = 0.2, 1.0   # §5.1: minimum anchor spacing for error rules
+LOAD_Q99_RATIO = 1.05                     # load rules: q99 at least this × q90, so anchors never collapse
+SCORE_FLOOR = 0.01                        # §5.2: sub-scores are floored here in the geometric mean
 WEIGHTS = {r: 1.0 / 6 for r in ERROR_RULES + LOAD_RULES}   # D5: equal until you approve a change
 
 
@@ -29,7 +31,10 @@ def validator_config() -> dict:
             "bomb_bomb_s": rules.BOMB_BOMB_S, "speed_run": rules.SPEED_RUN,
             "strain_tail": rules.STRAIN_TAIL, "local": [rules.LOCAL_BEATS, rules.LOCAL_STEP, rules.LOCAL_MIN_SWINGS],
             "nps_band": NPS_BAND, "min_stratum_maps": MIN_STRATUM_MAPS,
-            "error_anchor_min": [ERROR_Q90_MIN, ERROR_Q99_GAP], "weights": WEIGHTS}
+            "error_anchor_min": [ERROR_Q90_MIN, ERROR_Q99_GAP], "load_anchor_ratio": LOAD_Q99_RATIO,
+            "spread_deg": {"H3": rules.H3_DEG, "E3": rules.E3_DEG}, "score_floor": SCORE_FLOOR,
+            "rules": {"hard": list(HARD_RULES), "error": list(ERROR_RULES), "load": list(LOAD_RULES)},
+            "weights": WEIGHTS}
 
 
 class ValidatorDir:
@@ -49,17 +54,24 @@ class ValidatorDir:
     def open_for_write(self, config: dict | None = None) -> None:
         config = validator_config() if config is None else config
         self.dir.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(config, sort_keys=True, indent=1)
         if self.config_path.exists():
-            if json.loads(self.config_path.read_text()) != json.loads(text):
-                raise ValueError(f"validator config differs from {self.config_path}; bump VALIDATOR_VERSION")
+            self.check(config)
             return
-        self.config_path.write_text(text)
+        self.config_path.write_text(json.dumps(config, sort_keys=True, indent=1))
+
+    def check(self, config: dict | None = None) -> None:
+        """Refuse to read or write this version's tables when the code's config is not the pinned one."""
+        config = validator_config() if config is None else config
+        if not self.config_path.exists():
+            raise FileNotFoundError(f"{self.config_path} is missing; run `kata validate analyse` first")
+        if json.loads(self.config_path.read_text()) != json.loads(json.dumps(config, sort_keys=True)):
+            raise ValueError(f"validator config differs from {self.config_path}; bump VALIDATOR_VERSION")
 
     def write_reference(self, ref: "Reference") -> None:
         self.reference_path.write_text(json.dumps(ref.data, indent=1, sort_keys=True))
 
     def load_reference(self) -> "Reference":
+        self.check()
         return Reference(json.loads(self.reference_path.read_text()))
 
 
@@ -100,7 +112,7 @@ def _anchors(values: np.ndarray, error: bool) -> dict[str, float]:
         q90 = max(q90, ERROR_Q90_MIN)
         q99 = max(q99, q90 + ERROR_Q99_GAP)
     else:
-        q99 = max(q99, q90 * 1.05 + 1e-9)
+        q99 = max(q99, q90 * LOAD_Q99_RATIO + 1e-9)
     return {"q90": q90, "q99": q99, "zero": q99 + 2 * (q99 - q90)}
 
 

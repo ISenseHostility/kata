@@ -38,6 +38,7 @@ class SwingParams:
     w_unjust: float = 10.0      # DP cost of an unjustified reset (and of ignoring a bomb)
     w_slow: float = 0.5         # DP cost of a slow reset
     w_rot: float = 1.0          # DP cost per (rotation change / 180)^2
+    backhand_prior: float = 0.1 # DP start cost of a backhand first swing (a tie-breaker)
     rebound_deg: float = 180.0  # E1: rotation change of at least this (BL AutoModder ParityWarningAngle)
     inverted_deg: float = 135.0 # E1: |rotation| above this is an inverted swing (BL AutoModder)
 
@@ -183,7 +184,7 @@ def orient(swings: list[Swing], bomb_t, bomb_x, bomb_y, params: SwingParams = Sw
     hand = swings[0].hand
     forced = _forced(swings, hand, bomb_t, bomb_x, bomb_y)
     states = [_states(s) for s in swings]
-    cost = [((st[2] / 180.0) ** 2 + (0.1 if st[0] == BACKHAND else 0.0)
+    cost = [((st[2] / 180.0) ** 2 + (params.backhand_prior if st[0] == BACKHAND else 0.0)
              + (params.w_unjust if forced[0] is not None and st[0] != forced[0] else 0.0))
             for st in states[0]]
     back: list[list[int]] = [[]]

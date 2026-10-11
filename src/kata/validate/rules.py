@@ -24,6 +24,7 @@ VISION_WINDOW = {"Easy": (0.025, 1.2), "Normal": (0.05, 1.0), "Hard": (0.08, 0.7
 VISION_BOMB_T_MIN = 0.2
 # The game's NJS when a map leaves it at 0.
 DEFAULT_NJS = {"Easy": 10.0, "Normal": 10.0, "Hard": 10.0, "Expert": 12.0, "ExpertPlus": 16.0}
+H3_DEG, E3_DEG = 90.0, 45.0   # H3: same-swing arrows at least this far apart; E3: more than this
 OVERLAP_M = 0.5            # H1: same cell closer than this in depth (BL R3A)
 BOMB_BOMB_S = 0.02         # H1: two bombs in one cell closer than this (ScoreSaber)
 STRAIN_TAIL = 0.05         # L2: mean of the top 5 % of per-swing strain
@@ -220,10 +221,10 @@ def analyse(m: MapInput, params: SwingParams | None = None) -> Analysis:
                          "reset": s.reset, "forced": s.forced, "speed": speed[k],
                          "entry_x": s.entry[0], "entry_y": s.entry[1], "exit_x": s.exit[0],
                          "exit_y": s.exit[1], "note_rows": s.notes})
-            if s.spread >= 90:
-                issues.append(_issue("H3", "hard", hand, k, s.t_start, s.spread, 90))
-            elif s.spread > 45:
-                issues.append(_issue("E3", "error", hand, k, s.t_start, s.spread, 45))
+            if s.spread >= H3_DEG:
+                issues.append(_issue("H3", "hard", hand, k, s.t_start, s.spread, H3_DEG))
+            elif s.spread > E3_DEG:
+                issues.append(_issue("E3", "error", hand, k, s.t_start, s.spread, E3_DEG))
             if (s.reset == "unjustified" or s.d_rot >= params.rebound_deg
                     or abs(s.rotation) > params.inverted_deg):
                 issues.append(_issue("E1", "error", hand, k, s.t_start, s.d_rot, params.rebound_deg))

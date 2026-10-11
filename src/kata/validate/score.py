@@ -8,10 +8,8 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
-from kata.validate.reference import WEIGHTS, Reference
+from kata.validate.reference import SCORE_FLOOR, WEIGHTS, Reference
 from kata.validate.rules import HARD_RULES, SCORED_RULES, Analysis, MapInput, analyse
-
-SCORE_FLOOR = 0.01
 
 
 def sub_score(m: float, a: dict[str, float]) -> float:

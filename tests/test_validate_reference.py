@@ -55,3 +55,21 @@ def test_validator_dir_pins_its_config(tmp_path):
     changed = {**validator_config(), "overlap_m": 0.4}
     with pytest.raises(ValueError, match="bump VALIDATOR_VERSION"):
         vd.open_for_write(changed)
+
+
+def test_config_pins_every_score_changing_parameter():
+    c = validator_config()
+    assert c["rules"] == {"hard": ["H1", "H2", "H3"], "error": ["E1", "E2", "E3"], "load": ["L1", "L2", "L3"]}
+    assert c["spread_deg"] == {"H3": 90.0, "E3": 45.0}
+    assert c["score_floor"] == 0.01 and c["load_anchor_ratio"] == 1.05
+    assert c["swing"]["backhand_prior"] == 0.1
+
+
+def test_loading_the_reference_refuses_a_changed_config(tmp_path, toy_ref):
+    vd = ValidatorDir(tmp_path)
+    vd.open_for_write()
+    vd.write_reference(toy_ref)
+    assert vd.load_reference().data == toy_ref.data
+    vd.config_path.write_text('{"version": "v1", "something": "else"}')
+    with pytest.raises(ValueError, match="bump VALIDATOR_VERSION"):
+        vd.load_reference()

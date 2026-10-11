@@ -86,3 +86,11 @@ def test_reference_refuses_a_changed_validator_config(paths):
     ValidatorDir(paths.validator).config_path.write_text('{"version": "v1", "something": "else"}')
     with pytest.raises(ValueError, match="bump VALIDATOR_VERSION"):
         vp.reference_stage(paths)
+
+
+def test_score_refuses_a_changed_validator_config(paths):
+    vp.analyse_stage(paths)
+    vp.reference_stage(paths)
+    ValidatorDir(paths.validator).config_path.write_text('{"version": "v1", "something": "else"}')
+    with pytest.raises(ValueError, match="bump VALIDATOR_VERSION"):
+        vp.score_stage(paths)
