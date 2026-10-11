@@ -15,6 +15,10 @@ data = typer.Typer(no_args_is_help=True, help="Phase 1 data pipeline stages.")
 app.add_typer(data, name="data")
 audio = typer.Typer(no_args_is_help=True, help="Phase 2 audio feature stages (needs `uv sync --extra audio`).")
 app.add_typer(audio, name="audio")
+validate = typer.Typer(no_args_is_help=True, help="Phase 3 validator stages.")
+app.add_typer(validate, name="validate")
+baseline = typer.Typer(no_args_is_help=True, help="Phase 3 rule-based baseline mapper.")
+app.add_typer(baseline, name="baseline")
 
 PILOT = typer.Option(False, "--pilot", help="Restrict to the deterministic pilot subset.")
 
@@ -130,4 +134,88 @@ def audio_pilot():
     """Run every Phase 2 stage on the pilot subset, then write the pilot report."""
     from kata.audio import pipeline as ap
     for stage, fn, kwargs in ap.PILOT_STAGES:
+        _run(stage, fn, **kwargs)
+
+
+# --------------------------------------------------------------------------- Phase 3
+# Tier D lives in kata.data.lowrated; the validator and baseline import only numpy/polars, so
+# none of these commands needs the audio extra.
+
+@data.command("select-lowrated")
+def select_lowrated():
+    """Tier D: year-matched sample of low-rated maps from the stored catalogue."""
+    from kata.data import lowrated
+    _run("select-lowrated", lowrated.select_lowrated)
+
+
+@data.command("download-lowrated")
+def download_lowrated(pilot: bool = PILOT):
+    """Download Tier D maps without their audio (resumable)."""
+    from kata.data import lowrated
+    _run("download-lowrated", lowrated.download_lowrated, pilot=pilot)
+
+
+@data.command("parse-lowrated")
+def parse_lowrated(pilot: bool = PILOT):
+    """Parse Tier D into processed/lowrated/ and assign calibration halves."""
+    from kata.data import lowrated
+    _run("parse-lowrated", lowrated.parse_lowrated, pilot=pilot)
+
+
+@validate.command("analyse")
+def validate_analyse():
+    """Swings, issues and per-map / per-window metrics for every parsed difficulty (A-D)."""
+    from kata.validate import pipeline as vp
+    _run("validate-analyse", vp.analyse_stage)
+
+
+@validate.command("reference")
+def validate_reference():
+    """Tier A train quantiles -> validator/v1/reference.json."""
+    from kata.validate import pipeline as vp
+    _run("validate-reference", vp.reference_stage)
+
+
+@validate.command("score")
+def validate_score():
+    """Sub-scores, scores and the gate -> validation.parquet, validation_local.parquet."""
+    from kata.validate import pipeline as vp
+    _run("validate-score", vp.score_stage)
+
+
+@validate.command("corrupt")
+def validate_corrupt(pilot: bool = PILOT):
+    """Synthetic corruptions of Tier A val+test -> corruption_results.parquet."""
+    from kata.validate import pipeline as vp
+    _run("validate-corrupt", vp.corrupt_stage, pilot=pilot)
+
+
+@validate.command("report")
+def validate_report(name: str = typer.Option("phase3", help="Report file name prefix.")):
+    from kata.validate import pipeline as vp
+    _run("validate-report", vp.report_stage, name=name)
+
+
+@baseline.command("generate")
+def baseline_generate(pilot: bool = PILOT):
+    """Baseline maps for every val+test song -> generated/baseline/v1/, baseline_eval.parquet."""
+    from kata.baseline import pipeline as bp
+    _run("baseline-generate", bp.generate_stage, pilot=pilot)
+
+
+@validate.command("pilot")
+def validate_pilot():
+    """Phase 3 pilot: Tier D pilot maps, every validator stage and the baseline on the pilot subset."""
+    from kata.baseline import pipeline as bp
+    from kata.data import lowrated
+    from kata.validate import pipeline as vp
+    for stage, fn, kwargs in [("select-lowrated", lowrated.select_lowrated, {}),
+                              ("download-lowrated", lowrated.download_lowrated, {"pilot": True}),
+                              ("parse-lowrated", lowrated.parse_lowrated, {"pilot": True}),
+                              ("validate-analyse", vp.analyse_stage, {}),
+                              ("validate-reference", vp.reference_stage, {}),
+                              ("validate-score", vp.score_stage, {}),
+                              ("validate-corrupt", vp.corrupt_stage, {"pilot": True}),
+                              ("baseline-generate", bp.generate_stage, {"pilot": True}),
+                              ("validate-report", vp.report_stage, {"name": "phase3-pilot"})]:
         _run(stage, fn, **kwargs)
