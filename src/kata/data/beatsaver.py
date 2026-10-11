@@ -19,7 +19,7 @@ COMPLETE_MARKER = "_COMPLETE"
 # difficulty or audio files with any extension (seen: `*.ben`, a song literally named `.egg`).
 DROP_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".mp4", ".webm", ".mov", ".mkv"}
 # Tier D (Phase 3) keeps no audio: the validator reads only the .dat files.
-AUDIO_NAMES = {".egg", ".ogg", ".wav"}
+AUDIO_NAMES = {".egg", ".ogg", ".wav", ".mp3", ".flac", ".m4a", ".opus"}   # mappers sometimes leave the source file in
 
 
 def is_audio(name: str) -> bool:

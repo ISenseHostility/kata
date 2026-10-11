@@ -93,3 +93,7 @@ def test_select_and_parse_lowrated(tmp_path):
     assert set(d["tier"]) == {"D"}
     assert pl.read_parquet(p.lowrated / "notes.parquet").height == 600
     assert not (p.processed / "notes.parquet").exists()          # Tier D never touches the main tables
+
+
+def test_source_audio_left_in_a_map_zip_counts_as_audio():
+    assert all(is_audio(n) for n in ("song.mp3", "cigduet.MP3", "x.flac", "x.m4a", "x.opus"))
