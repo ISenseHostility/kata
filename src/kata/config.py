@@ -63,6 +63,21 @@ class Paths:
         return self.root / "features"
 
     @property
+    def lowrated(self) -> Path:
+        """Phase 3 Tier D tables (docs/phases/phase-3-validator.md §6.1)."""
+        return self.processed / "lowrated"
+
+    @property
+    def validator(self) -> Path:
+        """Phase 3 validator config and reference (docs/phases/phase-3-validator.md §9)."""
+        return self.root / "validator"
+
+    @property
+    def generated(self) -> Path:
+        """Phase 3 baseline maps (docs/phases/phase-3-validator.md §8.5)."""
+        return self.root / "generated"
+
+    @property
     def state_db(self) -> Path:
         return self.root / "state" / "pipeline.duckdb"
 
@@ -77,6 +92,6 @@ class Paths:
     def ensure(self) -> "Paths":
         for p in (self.catalog_pages, self.maps, self.bl_leaderboards, self.bl_scores,
                   self.replays, self.processed, self.replay_frames, self.features,
-                  self.state_db.parent, self.reports):
+                  self.lowrated, self.validator, self.generated, self.state_db.parent, self.reports):
             p.mkdir(parents=True, exist_ok=True)
         return self

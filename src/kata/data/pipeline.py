@@ -116,10 +116,10 @@ MAP_FILTERS = [
 ]
 
 
-def _select(paths, state, summary):
-    maps, diffs = beatsaver.flatten_catalog(paths)
-    con = duckdb.connect()
-    con.register("m_all", maps.drop("raw_json"))
+def _filter_catalog(con, maps: pl.DataFrame, diffs: pl.DataFrame) -> dict:
+    """Build `fm` (maps passing MAP_FILTERS) and `fd` (their difficulties passing §3.2, with a
+    tier) in `con`; returns the funnel counts."""
+    con.register("m_all", maps.drop("raw_json") if "raw_json" in maps.columns else maps)
     con.register("d", diffs)
     funnel = {"catalog_maps": maps.height}
     where = []
@@ -129,6 +129,13 @@ def _select(paths, state, summary):
     con.execute(f"CREATE TABLE fm AS SELECT * FROM m_all WHERE {' AND '.join(where)}")
     con.execute(SELECT_SQL)
     funnel["maps_with_valid_standard_diff"] = con.execute("SELECT count(DISTINCT map_id) FROM fd").fetchone()[0]
+    return funnel
+
+
+def _select(paths, state, summary):
+    maps, diffs = beatsaver.flatten_catalog(paths)
+    con = duckdb.connect()
+    funnel = _filter_catalog(con, maps, diffs)
 
     map_tiers = con.execute("""
         SELECT map_id, any_value(hash) AS hash, min(tier) AS map_tier
@@ -199,16 +206,14 @@ OBJECT_TABLES = {
 }
 
 
-def _parse_one_map(folder: str, map_hash: str, diff_rows: list[dict]) -> dict:
+def _parse_one_map(folder: str, map_hash: str, diff_rows: list[dict], audio: bool = True) -> dict:
     """Worker: parse a downloaded map folder.
 
     Returns the map row, difficulty rows, and one DataFrame per object table (columnar, so
-    the full run does not hold millions of Python dicts).
+    the full run does not hold millions of Python dicts). audio=False (Tier D) skips the audio
+    checks: those maps were extracted without their audio.
     """
-    import soundfile as sf
-
-    from kata.data.mapformat import (MapFormatError, find_audio, find_file, load_info,
-                                     parse_difficulty, read_json, tempo_for)
+    from kata.data.mapformat import load_info
 
     out = {"map": {"hash": map_hash}, "difficulties": [], "tempo_maps": [],
            **{name: [] for name in OBJECT_TABLES}}
@@ -220,8 +225,20 @@ def _parse_one_map(folder: str, map_hash: str, diff_rows: list[dict]) -> dict:
         return _frames(out)
     m.update(info_format_version=info.info_version, info_bpm=info.bpm,
              song_time_offset=info.song_time_offset, parse_status="ok", parse_error=None)
+    if audio:
+        _audio_checks(m, Path(folder), info.song_filename)
+    else:
+        m.update(audio_status="dropped", audio_error=None)
+    _parse_difficulties(out, folder, map_hash, diff_rows, info)
+    return _frames(out)
+
+
+def _audio_checks(m: dict, folder: Path, song_filename: str) -> None:
+    import soundfile as sf
+
+    from kata.data.mapformat import find_audio
     try:
-        audio, m["audio_filename_fallback"] = find_audio(Path(folder), info.song_filename)
+        audio, m["audio_filename_fallback"] = find_audio(folder, song_filename)
         m["audio_file"] = audio.name
         m["audio_bytes"] = audio.stat().st_size
         m["audio_sha256"] = hashlib.sha256(audio.read_bytes()).hexdigest()
@@ -231,6 +248,10 @@ def _parse_one_map(folder: str, map_hash: str, diff_rows: list[dict]) -> dict:
                  audio_channels=ai.channels, audio_status="ok", audio_error=None)
     except Exception as e:
         m.update(audio_status="error", audio_error=f"{type(e).__name__}: {e}"[:300])
+
+
+def _parse_difficulties(out: dict, folder: str, map_hash: str, diff_rows: list[dict], info) -> None:
+    from kata.data.mapformat import MapFormatError, find_file, parse_difficulty, read_json, tempo_for
 
     refs = {(d.characteristic, d.difficulty): d for d in info.difficulties}
     for row in diff_rows:
@@ -285,7 +306,6 @@ def _parse_one_map(folder: str, map_hash: str, diff_rows: list[dict]) -> dict:
             out[name].append(df)
         for seg in tempo.rows():
             out["tempo_maps"].append({**key, **seg})
-    return _frames(out)
 
 
 def _frames(out: dict) -> dict:
@@ -296,19 +316,28 @@ def _frames(out: dict) -> dict:
 
 def _parse_maps(paths, state, summary, pilot=False):
     sel_diffs = _subset(pl.read_parquet(paths.processed / "selected_diffs.parquet"), paths, pilot)
-    downloaded = state.done("download-map")
+    sel_maps = pl.read_parquet(paths.processed / "selected_maps.parquet").select("hash", "map_tier", "pilot")
+    summary.update(_parse_selection(paths, sel_diffs, sel_maps, state.done("download-map"), paths.processed))
+
+parse_maps = _with_state("parse-maps", _parse_maps)
+
+
+def _parse_selection(paths, sel_diffs: pl.DataFrame, sel_maps: pl.DataFrame, downloaded: set[str],
+                     out_dir: Path, audio: bool = True) -> dict:
+    """Parse the downloaded maps of a selection and write maps, difficulties, object and tempo
+    tables to out_dir. Returns the summary counts."""
+    summary: dict = {}
     by_hash: dict[str, list[dict]] = {}
     for r in sel_diffs.iter_rows(named=True):
         if r["hash"] in downloaded:
             by_hash.setdefault(r["hash"], []).append(r)
     results = []
     with ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as pool:
-        futures = [pool.submit(_parse_one_map, str(paths.maps / h), h, rows) for h, rows in by_hash.items()]
+        futures = [pool.submit(_parse_one_map, str(paths.maps / h), h, rows, audio) for h, rows in by_hash.items()]
         for f in futures:
             results.append(f.result())
 
     catalog = pl.read_parquet(paths.processed / "metadata_catalog.parquet").drop("raw_json")
-    sel_maps = pl.read_parquet(paths.processed / "selected_maps.parquet").select("hash", "map_tier", "pilot")
     maps_df = (pl.DataFrame([r["map"] for r in results], infer_schema_length=None)
                .join(catalog, on="hash", how="left").join(sel_maps, on="hash", how="left"))
     diffs_df = pl.DataFrame([d for r in results for d in r["difficulties"]], infer_schema_length=None)
@@ -317,8 +346,9 @@ def _parse_maps(paths, state, summary, pilot=False):
                          "parity_warns", "parity_resets", "ss_stars", "bl_stars", "chroma", "cinema",
                          "environment"),
         on=["hash", "characteristic", "difficulty"], how="left")
-    maps_df.write_parquet(paths.processed / "maps.parquet")
-    diffs_df.write_parquet(paths.processed / "difficulties.parquet")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    maps_df.write_parquet(out_dir / "maps.parquet")
+    diffs_df.write_parquet(out_dir / "difficulties.parquet")
 
     accepted = diffs_df.filter(pl.col("parse_status") == "ok").select("hash", "characteristic", "difficulty")
     for name in OBJECT_TABLES:
@@ -328,9 +358,9 @@ def _parse_maps(paths, state, summary, pilot=False):
             front = ["hash", "characteristic", "difficulty", "idx"]
             df = df.join(accepted, on=["hash", "characteristic", "difficulty"], how="semi").select(
                 front + [c for c in df.columns if c not in front])
-        df.write_parquet(paths.processed / f"{name}.parquet")
+        df.write_parquet(out_dir / f"{name}.parquet")
     tempo = pl.DataFrame([x for r in results for x in r["tempo_maps"]], infer_schema_length=None)
-    tempo.write_parquet(paths.processed / "tempo_maps.parquet")
+    tempo.write_parquet(out_dir / "tempo_maps.parquet")
 
     summary["maps"] = maps_df.height
     summary["map_parse_status"] = dict(maps_df.group_by("parse_status").len().iter_rows())
@@ -338,8 +368,7 @@ def _parse_maps(paths, state, summary, pilot=False):
     summary["diff_status"] = dict(diffs_df.group_by("parse_status").len().iter_rows())
     summary["format_versions"] = dict(diffs_df.group_by(pl.col("format_version").str.slice(0, 1))
                                       .len().sort("format_version").iter_rows())
-
-parse_maps = _with_state("parse-maps", _parse_maps)
+    return summary
 
 
 # --------------------------------------------------------------------------- leaderboards
@@ -611,6 +640,8 @@ def _build(paths, state, summary):
     con = duckdb.connect(str(paths.query_db))
     for f in sorted(paths.processed.glob("*.parquet")):
         con.execute(f"CREATE OR REPLACE VIEW {f.stem} AS SELECT * FROM read_parquet('{f.as_posix()}')")
+    for f in sorted(paths.lowrated.glob("*.parquet")):   # Phase 3 Tier D
+        con.execute(f"CREATE OR REPLACE VIEW lowrated_{f.stem} AS SELECT * FROM read_parquet('{f.as_posix()}')")
     frames_glob = (paths.replay_frames / "*" / "*.parquet").as_posix()
     if any(paths.replay_frames.glob("*/*.parquet")):
         con.execute(f"""CREATE OR REPLACE VIEW replay_frames AS

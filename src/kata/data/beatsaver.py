@@ -18,6 +18,13 @@ COMPLETE_MARKER = "_COMPLETE"
 # Covers and videos are dropped; everything else is kept, because Info.dat may name
 # difficulty or audio files with any extension (seen: `*.ben`, a song literally named `.egg`).
 DROP_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".mp4", ".webm", ".mov", ".mkv"}
+# Tier D (Phase 3) keeps no audio: the validator reads only the .dat files.
+AUDIO_NAMES = {".egg", ".ogg", ".wav"}
+
+
+def is_audio(name: str) -> bool:
+    n = name.lower()
+    return PurePosixPath(n).suffix in AUDIO_NAMES or n in AUDIO_NAMES
 
 
 def _write_page(path: Path, docs: list[dict]) -> None:
@@ -137,7 +144,7 @@ def flatten_catalog(paths: Paths) -> tuple[pl.DataFrame, pl.DataFrame]:
     return maps_df, diffs_df
 
 
-def extract_map(zip_path: Path, dest: Path) -> list[str]:
+def extract_map(zip_path: Path, dest: Path, drop_audio: bool = False) -> list[str]:
     """Extract the files next to Info.dat (flattened; no path traversal possible)."""
     with zipfile.ZipFile(zip_path) as z:
         members = [i for i in z.infolist() if not i.is_dir()]
@@ -149,20 +156,21 @@ def extract_map(zip_path: Path, dest: Path) -> list[str]:
         kept = []
         for i in members:
             p = PurePosixPath(i.filename)
-            if p.parent != base or p.suffix.lower() in DROP_SUFFIXES:
+            if p.parent != base or p.suffix.lower() in DROP_SUFFIXES or (drop_audio and is_audio(p.name)):
                 continue
             (dest / p.name).write_bytes(z.read(i))
             kept.append(p.name)
     return kept
 
 
-async def download_map(client: PoliteClient, paths: Paths, map_hash: str, url: str) -> dict:
+async def download_map(client: PoliteClient, paths: Paths, map_hash: str, url: str,
+                       drop_audio: bool = False) -> dict:
     zip_path = paths.maps / "_zips" / f"{map_hash}.zip"
     sha = await client.download(url, zip_path)
     size = zip_path.stat().st_size
     dest = paths.maps / map_hash
     try:
-        files = extract_map(zip_path, dest)
+        files = extract_map(zip_path, dest, drop_audio)
     finally:
         zip_path.unlink(missing_ok=True)
     return {"zip_sha256": sha, "zip_bytes": size, "files": files}
