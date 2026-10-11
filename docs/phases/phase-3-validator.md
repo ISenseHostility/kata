@@ -387,7 +387,7 @@ has exactly one known defect.
 | C2 | Insert a bomb at (1 or 2, 1), middle row, 250 ms before a note on the same half. Middle-row bombs do not affect parity (§3.3) | E2 |
 | C3 | Duplicate an outer-lane note as a bomb in the same cell, 10 ms later | H1 |
 | C4 | Time-compress a random 8-swing run of one hand until its mean speed is 1.5× the stratum's L1 q99. Runs that are already that fast, or whose gaps would shrink below 75 ms (slider range), are not eligible | L1 |
-| C5 | Zig-zag the arrows of 4 consecutive single-arrow swings of one hand: +90°, −90°, +90°, −90° | L2 |
+| C5 | Zig-zag the arrows of 4 consecutive single-arrow swings of one hand: +90°, −90°, +90°, −90°, where every gap between them is < `T_reset` (a slower zig-zag is a legal slow reset; §18) | L2 |
 | C6 | Rotate one arrow of a same-time stack or window by 90° | H3 |
 | C7 | Turn one arrow of a same-time stack or window by 60° (`angle_offset`) | E3 |
 
@@ -690,10 +690,11 @@ hand. Expected minutes per stage with 8 workers **[verify in pilot]**.
    criterion. (The difficulty label is not a stratum dimension: with ~700
    Tier A val/test difficulties, cells would be too thin, and load rules are
    already label-referenced. Per-label AUC is reported separately; §17.)
-5. **Corruptions**: each of C1–C7 is detected in ≥ 95 % of eligible
-   injections, with false alarms ≤ 1 % of swings. The prototype measured
-   C1 at 92 % and C5 at 82 % (§17); the pilot either finds the cause or
-   proposes a different bar to you.
+5. **Corruptions**: each of C2–C7 is detected in ≥ 95 % of eligible
+   injections, and C1 in ≥ **90 %**, with false alarms ≤ 1 % of swings.
+   C1's lower bar and C5's fast-only eligibility come from the pilot (§18):
+   most C1 misses are swings at exactly |ρ| = 135°, which ranked maps also
+   contain.
 6. **Baseline**:
    - 100 % of generated difficulties pass the gate;
    - the median score per difficulty is at or above Tier A's q10 for the
@@ -773,6 +774,8 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-10 | — | Local score windows use 16 map beats, not 4 audio bars: Tier D has no audio features |
 | 2026-10-10 | — | Per-stratum AUC gets a floor (size-weighted mean ≥ 0.80) in addition to the overall 0.85 |
 | 2026-10-10 | — | Spec approved. Prototype corrections to §3.2, §3.3, §4.1, §6.3, §8.1–8.3, §9–§11 (§17) |
+| 2026-10-11 | — | Pilot (§18), approved by you: C5 only zig-zags runs whose gaps are all < `T_reset`; C1's recall bar is 90 % (E1 keeps \|ρ\| > 135°); no threshold or weight changes, so `VALIDATOR_VERSION` stays v1 |
+| 2026-10-11 | — | ArcViewer check of the 5 pilot zips passed (criterion 7) |
 
 ---
 
@@ -948,7 +951,7 @@ below use the tuning halves only.
 | S3RL — What is a DJ? | 176.1 | yes | `7582d4adbd7c7261aef0a0686d09d60f8645fa1b6e9bf76478a8e92c27f202dd.zip` |
 | Ashrount — LaμreLs | 201.2 | yes | `234e8af9e46c64ca17c5e7dc2614086637959cccdc2a3cf877ebb4589bc02c19.zip` |
 
-**Proposed changes (awaiting approval; none applied).**
+**Proposed changes (approved 2026-10-11; applied, §15).**
 1. **C5 eligibility:** only zig-zags whose swings are less than `T_reset[label]`
    apart, which measures 99.5 % against the 95 % bar. Slow zig-zags are
    playable, so they are not a defect to detect. Changes the corruption only,

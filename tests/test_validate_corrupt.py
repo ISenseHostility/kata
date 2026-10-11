@@ -46,3 +46,10 @@ def test_a_window_already_below_half_in_the_clean_map_is_not_a_detection(toy_ref
     clean = _result(slow_resets, toy_ref)
     assert (clean.local["s_L3"] < 0.5).any()
     assert evaluate(Injection("C5", "L2", 1, 10.0, 20.0, 12.0), clean, clean) == (False, 0)
+
+
+def test_c5_zig_zags_only_runs_too_fast_for_a_reset(toy_ref):
+    fast = MapInput("ExpertPlus", 18.0, 0.0, 120.0, stream(step=0.09))   # same-hand gaps 0.18 s < 0.20 s
+    slow = MapInput("ExpertPlus", 18.0, 0.0, 120.0, stream(step=0.15))   # 0.30 s: a slow reset is legal there
+    assert corrupt("C5", fast, analyse(fast), np.random.default_rng(0)) is not None
+    assert corrupt("C5", slow, analyse(slow), np.random.default_rng(0)) is None

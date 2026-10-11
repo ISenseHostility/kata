@@ -126,7 +126,9 @@ def corrupt(kind: str, m: MapInput, clean: Analysis, rng: np.random.Generator,
         single = h["n_notes"].to_numpy() == 1
         arrow = np.array([n["cut_dir"][rows[0]] < 8 for rows in h["note_rows"]], bool) if h.height else np.zeros(0, bool)
         good = single & arrow
-        starts = [k for k in range(h.height - 3) if good[k:k + 4].all()]
+        # only zig-zags too fast for a reset: a slower one is a legal slow reset, not a defect (§18)
+        fast = h["t_start"].to_numpy()[1:] - h["t_end"].to_numpy()[:-1] < t_reset
+        starts = [k for k in range(h.height - 3) if good[k:k + 4].all() and fast[k:k + 3].all()]
         if not starts:
             return None
         k = starts[int(rng.integers(len(starts)))]
