@@ -1,8 +1,8 @@
 # Phase 3 — Validator + rule-based baseline
 
-Status: **APPROVED 2026-10-10.** Prototype corrections in §17.
+Status: **APPROVED 2026-10-10.** Prototype corrections in §17; pilot findings in §18.
 Implementation plan: docs/phases/phase-3-validator-plan.md.
-Last updated: 2026-10-10
+Last updated: 2026-10-11
 
 ## 0. Summary
 
@@ -878,3 +878,84 @@ download). Corrections made to this doc as a result:
 
 Tier C is not Tier D: it is the unranked difficulties of ranked maps. Real
 Tier D numbers come from the pilot.
+
+## 18. Pilot findings (2026-10-11)
+
+`kata validate pilot` downloaded the 200 Tier D pilot maps and ran every
+stage on all parsed difficulties (Tiers A–C plus Tier D pilot). It ran
+twice: once on the plan's code, and once after the final-review fixes. The
+fixes: corruption detection counts only new issues on the injected hand; the
+config pin covers every score-changing parameter and is checked wherever the
+reference is loaded; and the pilot report compares the **tuning halves**
+(Tier A train vs. Tier D fit) instead of the held-out ones. The numbers below
+are from the second run. Report: `E:\kata-data\reports\phase3-pilot-2026-10-11.md`.
+
+| Item | Result |
+|------|--------|
+| Tier D download | 200 / 200 maps, 0 errors, 41 s; 0 audio files left |
+| Tier D parse (criterion 1) | 258 / 259 difficulties ok (**99.6 %**; bar 99 %); 1 rejected |
+| Tier D size | 1.8 MB tables + 39 MB raw `.dat` for 200 maps → ~0.4 GB for 2,000 (bar 1 GB) |
+| Tier D year mix (2,000 sample) | 2018 309 · 2019 125 · 2020 377 · 2021 604 · 2022 352 · 2023 133 · 2024 74 · 2025 26. 2022–2025 are used in full: 29 % of the sample vs. 55 % of Tier A |
+| `analyse` coverage (criterion 2) | 15,440 difficulties (A 7,463, B 7,459, C 260, D 258), 0 errors, 92 s |
+| Gate (criterion 3) | Tier A train **99.5 %**, B 98.9 %, C 91.9 %, Tier D fit 91.5 %. Tier A val+test goes in the final report |
+| Separation, Tier A train vs. Tier D fit (criterion 4) | overall AUC **0.897** (6,766 vs. 117); per-stratum **0.870**, but only 1 cell (≤ 2019 × 0–4 NPS, 335 vs. 40) has ≥ 20 maps per side in the pilot |
+| Per-rule AUC (sub-scores) | E1 0.79, E2 0.81, E3 0.50, L1 0.54, L2 0.72, L3 0.79 |
+| Per-label AUC | Easy 0.92 (5 D), Normal 0.83 (8), Hard 0.95 (19), Expert 0.985 (47), Expert+ 0.77 (38) |
+| Corruptions, 100 Tier A val/test diffs (criterion 5) | C1 **92.1 %**, C2 98.8 %, C3 100 %, C4 100 % (90 eligible), C5 **80.6 %**, C6 100 %, C7 100 %; false alarms ≤ 0.008 % of swings |
+| Baseline, 15 pilot songs × 5 (criterion 6) | 100 % pass, 100 % round trip, median score 100 in every label (Tier A q10 92.5–95.7); median timing F Easy 0.25, Normal 0.39, Hard 0.45, Expert 0.33, Expert+ 0.50; 2.5 s in total |
+| `validate()` speed, 60 Tier A Expert+ diffs (criterion 8) | median **40–45 ms**, p90 79–85 ms, max 105–121 ms (two runs) |
+| BeatSaver parity agreement, v2 (diagnostic) | Tier A train 80 %, B 60 %, C 63 %, D fit 76 % |
+
+**C1 (92 %, bar 95 %): mostly the rule boundary.** 37 of 470 injections were
+missed. In 26 of them, the flipped arrow becomes a swing with a wrist rotation
+of exactly |ρ| = 135°. E1's inverted-swing test is |ρ| > 135° (AutoModder), so
+these are not flagged. Moving the bound to ≥ 135° is not a free fix:
+|ρ| = 135° is 0.65 % of Tier A train swings (19× the rate of |ρ| > 135°) and
+1.6 % of Tier D fit swings, only 2.5× more. That would put the average ranked
+map above E1's q90 anchor floor (0.2 issues per 100 swings). In the other 11
+misses, the DP explains the flip with a rotation change below 180° and no
+unjustified reset. The rule is behaving as designed; the corruption sometimes
+creates a swing that ranked maps also contain.
+
+**C5 (81 %, bar 95 %): the corruption, at slow tempos.** If the zig-zag's
+swings are less than `T_reset` apart, it is detected in 211 of 212 cases
+(99.5 %). Slower zig-zags are detected in 192 of 288 cases (67 %). The DP
+reads them as slow resets, which are legal and show up in L3, not L2. Three
+slow resets in a 16-beat window rarely push s_L3 below 0.5. A slow ±90°
+zig-zag is playable, so missing it is the right call. The review fix (only
+new issues and newly failing windows count) lowered C5 from 82.4 % to 80.6 %,
+and C2 from 100 % to 98.8 %.
+
+**Other observations.**
+- E3's sub-score is 1.0 on average in every tier, so it adds nothing to the
+  separation (AUC 0.50). Under the geometric mean it costs nothing either.
+- L1 separates weakly (0.54).
+- Expert+ is the weakest label (0.77).
+
+**Leakage note (criterion 9).** The first run's report still compared Tier A
+val+test with Tier D holdout, and the executor read it: overall AUC 0.915,
+per-stratum 0.877 over one cell. Nothing was tuned on it, and the proposals
+below use the tuning halves only.
+
+**ArcViewer check (criterion 7, manual).** Five pilot zips under
+`E:\kata-data\generated\baseline\v1\`, covering slow, fast and unsteady songs:
+
+| Song | Grid BPM | Piecewise | Zip |
+|------|----------|-----------|-----|
+| Persona 3 — Burn My Dread (Short) | 97.5 | no | `3c16f76c2cb68c679475714788c65cee923dca33f0a605c155372cb89c0cee01.zip` |
+| bbno$ — BPOT | 103.0 | no | `61d78d94d232bd19db4d84b280e791db01c3f124091e4fc2b86752adb297523f.zip` |
+| Olivia Rodrigo — Brutal | 122.8 | yes | `d02ad8b5ec39d3742312d38cfb73ba492c282003f7867ba7fb4c3b671e3b5bfb.zip` |
+| S3RL — What is a DJ? | 176.1 | yes | `7582d4adbd7c7261aef0a0686d09d60f8645fa1b6e9bf76478a8e92c27f202dd.zip` |
+| Ashrount — LaμreLs | 201.2 | yes | `234e8af9e46c64ca17c5e7dc2614086637959cccdc2a3cf877ebb4589bc02c19.zip` |
+
+**Proposed changes (awaiting approval; none applied).**
+1. **C5 eligibility:** only zig-zags whose swings are less than `T_reset[label]`
+   apart, which measures 99.5 % against the 95 % bar. Slow zig-zags are
+   playable, so they are not a defect to detect. Changes the corruption only,
+   not the validator, so no version bump.
+2. **C1 bar:** lower it to 90 % and keep E1's |ρ| > 135°. Raising E1 to
+   ≥ 135° would also reach 95 %, but would flag 0.65 % of ranked swings;
+   not recommended.
+3. **No threshold or weight changes.** On the tuning halves, 0.897 overall and
+   0.870 per stratum already clear the 0.85 / 0.80 bars. The per-stratum
+   criterion can only be judged on the full Tier D sample (Task 11).
