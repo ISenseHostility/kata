@@ -166,25 +166,36 @@ def _window(inj: Injection, res: Result) -> tuple[float, float]:
     return (t0[lo] - 1e-6, t1[hi] + 1e-6) if len(t0) else (inj.time_s - 0.5, inj.time_s + 0.5)
 
 
+def _dropped(clean: Result, bad: Result, rule: str, beat: float) -> bool:
+    """A window containing `beat` whose sub-score for `rule` is < 0.5 in `bad` but was not in `clean`."""
+    def below(res: Result) -> set[float]:
+        if res.local.height == 0:
+            return set()
+        w = res.local.filter((pl.col("window_start_beat") <= beat) & (pl.col("window_start_beat") + LOCAL_BEATS > beat)
+                             & (pl.col(f"s_{rule}") < 0.5))
+        return set(w["window_start_beat"].to_list())
+    return bool(below(bad) - below(clean))
+
+
 def evaluate(inj: Injection, clean: Result, bad: Result) -> tuple[bool, int]:
-    """(detected, false alarms). Hard/error rules: an issue of the rule within ±1 swing.
-    Load rules: that rule's local sub-score < 0.5 in a window containing the injection. C5 (L2)
-    also counts L3 there or an E1 issue within ±1 swing: the DP reads a fast zig-zag as rotation
-    strain or a parity break, and a slower one as resets (§6.3)."""
+    """(detected, false alarms). Hard/error rules: a new issue of the rule within ±1 swing, on the
+    injected hand (any hand for bombs). Load rules: that rule's local sub-score drops below 0.5 in
+    a window containing the injection. C5 (L2) also counts L3 there or a new E1 issue within ±1
+    swing: the DP reads a fast zig-zag as rotation strain or a parity break, and a slower one as
+    resets (§6.3). Issues and windows already present in the clean map never count."""
     lo, hi = _window(inj, bad)
     if inj.end_s is not None:
         hi = max(hi, inj.end_s + 1e-6)
     near = (pl.col("time_s") >= lo) & (pl.col("time_s") <= hi)
+    own = near & (pl.col("hand") == inj.hand) if inj.hand >= 0 else near
+    key = pl.col("rule") + "@" + pl.col("time_s").round(3).cast(pl.String)
+    old = list(set(clean.issues.select(key).to_series().to_list()))
+    fresh = bad.issues.with_columns(k=key).filter(~pl.col("k").is_in(old))
     if inj.rule.startswith("L"):
         # C5's zig-zag reads as rotation strain, as resets, or as parity breaks, depending on tempo.
         rules_ = ("L2", "L3") if inj.rule == "L2" else (inj.rule,)
-        w = bad.local.filter((pl.col("window_start_beat") <= inj.beat)
-                             & (pl.col("window_start_beat") + LOCAL_BEATS > inj.beat)) if bad.local.height else bad.local
-        hit = any(w.height and w.filter(pl.col(f"s_{r}") < 0.5).height for r in rules_) or (
-            inj.rule == "L2" and bad.issues.filter(near & (pl.col("rule") == "E1")).height > 0)
+        hit = any(_dropped(clean, bad, r, inj.beat) for r in rules_) or (
+            inj.rule == "L2" and fresh.filter(own & (pl.col("rule") == "E1")).height > 0)
     else:
-        hit = bad.issues.filter(near & (pl.col("rule") == inj.rule)).height > 0
-    key = pl.col("rule") + "@" + pl.col("time_s").round(3).cast(pl.String)
-    old = set(clean.issues.select(key).to_series().to_list())
-    new = bad.issues.filter(~near).with_columns(k=key).filter(~pl.col("k").is_in(list(old)))
-    return hit, new.height
+        hit = fresh.filter(own & (pl.col("rule") == inj.rule)).height > 0
+    return hit, fresh.filter(~near).height
