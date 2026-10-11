@@ -191,9 +191,12 @@ def validate_corrupt(pilot: bool = PILOT):
 
 
 @validate.command("report")
-def validate_report(name: str = typer.Option("phase3", help="Report file name prefix.")):
+def validate_report(name: str = typer.Option("phase3", help="Report file name prefix."),
+                    calibration: str = typer.Option("holdout", help="Separation sets: 'holdout' (final) or "
+                                                    "'fit' (tuning halves, for pilot decisions).")):
+    """Phase 3 Markdown report under reports/."""
     from kata.validate import pipeline as vp
-    _run("validate-report", vp.report_stage, name=name)
+    _run("validate-report", vp.report_stage, name=name, calibration=calibration)
 
 
 @baseline.command("generate")
@@ -217,5 +220,5 @@ def validate_pilot():
                               ("validate-score", vp.score_stage, {}),
                               ("validate-corrupt", vp.corrupt_stage, {"pilot": True}),
                               ("baseline-generate", bp.generate_stage, {"pilot": True}),
-                              ("validate-report", vp.report_stage, {"name": "phase3-pilot"})]:
+                              ("validate-report", vp.report_stage, {"name": "phase3-pilot", "calibration": "fit"})]:
         _run(stage, fn, **kwargs)

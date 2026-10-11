@@ -17,6 +17,10 @@ from kata.validate.rules import SCORED_RULES
 YEAR_BINS = [(0, 2019, "≤2019"), (2020, 2021, "2020-21"), (2022, 2023, "2022-23"), (2024, 9999, "≥2024")]
 NPS_BINS = [(0, 4, "0-4"), (4, 6, "4-6"), (6, 8, "6-8"), (8, 1e9, "8+")]
 MIN_PER_SIDE = 20
+# Section 4's comparison sets. The pilot report separates the tuning halves only (spec §6.2, §10,
+# criterion 9); the held-out halves are reported once, after tuning.
+CALIBRATION = {"holdout": (("val", "test"), "holdout", "Tier A val+test vs. Tier D holdout"),
+               "fit": (("train",), "fit", "Tier A train vs. Tier D fit")}
 
 
 def auc(pos, neg) -> float:
@@ -67,7 +71,8 @@ def stratified_auc(a: pl.DataFrame, d: pl.DataFrame, col: str = "score") -> tupl
     return t, mean
 
 
-def write_report(paths: Paths, state, name: str) -> Path:
+def write_report(paths: Paths, state, name: str, calibration: str = "holdout") -> Path:
+    a_splits, d_split, title = CALIBRATION[calibration]
     P = paths.processed
     out = [f"# Phase 3 validator report — {name}", "",
            f"Generated {datetime.now():%Y-%m-%d %H:%M}. Data root `{paths.root}`.", ""]
@@ -88,25 +93,27 @@ def write_report(paths: Paths, state, name: str) -> Path:
     if not (P / "validation.parquet").exists():
         return _write(paths, name, out)
     v = pl.read_parquet(P / "validation.parquet")
+    if calibration == "fit":   # the tuning report never shows a held-out difficulty
+        v = v.filter(~(((pl.col("tier") == "A") & pl.col("split").is_in(["val", "test"]))
+                       | ((pl.col("tier") == "D") & (pl.col("split") == "holdout"))))
     out += ["## 3. Gate and score per tier", "", md_table(v.group_by("tier").agg(
         pl.len().alias("n"), pl.col("pass").mean().alias("pass_rate"),
         pl.col("score").quantile(0.1).alias("q10"), pl.col("score").median().alias("median"),
         *(pl.col(f"s_{r}").mean().alias(f"mean_s_{r}") for r in SCORED_RULES)).sort("tier")), ""]
 
-    a = v.filter((pl.col("tier") == "A") & pl.col("split").is_in(["val", "test"]))
-    d = v.filter((pl.col("tier") == "D") & (pl.col("split") == "holdout"))
+    in_a = (pl.col("tier") == "A") & pl.col("split").is_in(list(a_splits))
+    in_d = (pl.col("tier") == "D") & (pl.col("split") == d_split)
+    a, d = v.filter(in_a), v.filter(in_d)
     if a.height and d.height:
         cells, mean = stratified_auc(a, d)
         per_rule = {r: round(auc(a[f"s_{r}"], d[f"s_{r}"]), 3) for r in SCORED_RULES}
-        per_label = (v.filter(pl.col("tier").is_in(["A", "D"]))
-                     .filter(((pl.col("tier") == "A") & pl.col("split").is_in(["val", "test"]))
-                             | ((pl.col("tier") == "D") & (pl.col("split") == "holdout"))))
+        per_label = v.filter(in_a | in_d)
         label_rows = [{"difficulty": lab, "n_a": g.filter(pl.col("tier") == "A").height,
                        "n_d": g.filter(pl.col("tier") == "D").height,
                        "auc": round(auc(g.filter(pl.col("tier") == "A")["score"],
                                         g.filter(pl.col("tier") == "D")["score"]), 3)}
                       for (lab,), g in per_label.group_by("difficulty")]
-        out += ["## 4. Separation: Tier A val+test vs. Tier D holdout (criterion 4)", "",
+        out += [f"## 4. Separation: {title} (criterion 4)", "",
                 f"- Gate pass: Tier A {a['pass'].mean():.4f} · Tier D {d['pass'].mean():.4f}",
                 f"- **Overall AUC {auc(a['score'], d['score']):.3f}** (A {a.height}, D {d.height})",
                 f"- **Per-stratum AUC, size-weighted mean {mean:.3f}** over {cells.height} cells "

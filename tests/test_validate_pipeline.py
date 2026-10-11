@@ -94,3 +94,15 @@ def test_score_refuses_a_changed_validator_config(paths):
     ValidatorDir(paths.validator).config_path.write_text('{"version": "v1", "something": "else"}')
     with pytest.raises(ValueError, match="bump VALIDATOR_VERSION"):
         vp.score_stage(paths)
+
+
+def test_pilot_report_separates_the_tuning_halves_not_the_held_out_ones(paths):
+    vp.analyse_stage(paths)
+    vp.reference_stage(paths)
+    vp.score_stage(paths)
+    held_out = open(vp.report_stage(paths, name="h")["path"], encoding="utf-8").read()
+    assert "Tier A val+test vs. Tier D holdout" in held_out and "(A 2, D 2)" in held_out
+    tuning = open(vp.report_stage(paths, name="p", calibration="fit")["path"], encoding="utf-8").read()
+    assert "Tier A train vs. Tier D fit" in tuning and "(A 12, D 1)" in tuning
+    assert "holdout" not in tuning
+    assert "| D | 1 |" in tuning and "| A | 12 |" in tuning     # per-tier table: tuning halves only

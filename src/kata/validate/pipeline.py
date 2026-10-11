@@ -204,8 +204,8 @@ def corruption_summary(df: pl.DataFrame) -> pl.DataFrame:
         .sort("corruption"))
 
 
-def _report(paths, state, summary, name="phase3"):
+def _report(paths, state, summary, name="phase3", calibration="holdout"):
     from kata.validate.report import write_report
-    summary["path"] = str(write_report(paths, state, name))
+    summary["path"] = str(write_report(paths, state, name, calibration))
 
 report_stage = _with_state("validate-report", _report)
