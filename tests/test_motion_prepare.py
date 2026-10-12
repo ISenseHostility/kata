@@ -76,6 +76,19 @@ def test_heights_are_normalised_by_median_head_height():
     assert np.allclose(tall.data, ref.data, atol=1e-5)
 
 
+def test_frames_without_a_pose_are_dropped():
+    # Many real BSORs start with an all-zero frame (pilot: 298 of 875); its zero quaternions became NaN.
+    notes = synth_notes()
+    r = synth_replay(notes)
+    for name in ("t",) + r.frames.dtype.names[2:]:              # at t = 0 exactly, as in the BSORs
+        r.frames[name][0] = 0.0
+    p = prepare_replay(r, notes, left_handed=False)
+    assert np.isfinite(p.data).all()
+    r.frames["left_px"][100] = np.nan                                  # any other bad value: rejected
+    with pytest.raises(Rejected, match="non_finite"):
+        prepare_replay(r, notes, left_handed=False)
+
+
 def test_tracking_gaps_are_flagged_not_dropped():
     notes = synth_notes()
     p = prepare_replay(synth_replay(notes, gap=(5.0, 5.3)), notes, left_handed=False)

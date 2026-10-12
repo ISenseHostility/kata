@@ -90,7 +90,10 @@ def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bo
     if not res.residual_quantile(0.95) <= ALIGN_MAX_P95_MS:
         raise Rejected("align_residual")
 
-    frames = replay.frames[monotonic(replay.frames["t"])]
+    frames = replay.frames
+    posed = np.all([np.abs(np.stack([frames[f"{p}_q{c}"] for c in "xyzw"], -1)).sum(-1) > 0 for p in PARTS], 0)
+    frames = frames[posed]                                  # recorders often start with an all-zero frame
+    frames = frames[monotonic(frames["t"])]
     if len(frames) < 2:
         raise Rejected("too_few_frames")
     t, pos, quat = _poses(frames)
@@ -149,6 +152,8 @@ def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bo
         off = np.bincount(inv, weights=(f - fi)[sel], minlength=len(frames_h)) / np.bincount(inv)
         data[frames_h, HIT[h]] = 1.0
         data[frames_h, OFF[h]] = off
+    if not np.isfinite(data).all():
+        raise Rejected("non_finite")
     info = {"n_frames": len(data), "n_valid": int(valid.sum()),
             "n_hits_left": int((data[:, HIT[0]] > 0).sum()), "n_hits_right": int((data[:, HIT[1]] > 0).sum()),
             "mirrored": left_handed, "world_mirrored": world_mirrored, "hands_swapped": hands_swapped,
