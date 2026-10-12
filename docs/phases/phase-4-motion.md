@@ -377,8 +377,8 @@ An epoch is defined as 1,000 steps; there is no notion of a full pass.
   the step is the full batch's.
 - **EMA** of the weights (decay 0.999); sampling and evaluation use the EMA
   copy.
-- Throughput estimate ~0.5 s per step ⇒ ~80k steps per 12 h night
-  **[verify at setup]**.
+- Throughput measured in the pilot: 0.54 s per step (1.86 steps/s, 4
+  workers) ⇒ ~80k steps per 12 h night (§16).
 
 ### 6.4 Runs, checkpoints and resume (D3)
 
@@ -658,7 +658,74 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 
 ## 16. Pilot findings
 
-Empty until the pilot (§10 step 2).
+Pilot 2026-10-12 on the training machine (RTX 5080 16 GB, 31 GB RAM, 16
+threads; `E:` is an internal NVMe SSD). Changes marked *approved* were
+approved by you at the checkpoint (§14).
+
+**Tracks.** 1,328 pilot replays are candidates (1,256 accepted by Phase 1,
+72 left-handed). 453 of them are on the deselected Tier B maps, which have
+no row in `maps.parquet`, so prepare never considers them: 875 remain.
+With the changes below every one of the 875 becomes a track, 834 of them
+in train.
+
+**Blade axis and offsets.** The blade is 1 m along the saber's local +z,
+and the BSOR saber offsets must not be applied: cut points lie on the
+plane swept by the cutting +z blade to a median 1.5 mm. Every other local
+axis misses that plane by 0.3–0.4 m; applying the offsets on top moves the
+blade 0.43 m off.
+
+**Blade check (*approved*).** The specified statistic, distance from the
+cut point to the blade *segment*, came out at a median 0.24 m on good
+replays and rejected 347 of 875 (40 %) at 0.30 m. The cut point is the
+note centre projected onto the cut plane, so it often lies past the tip,
+more so for players who reach. The check now measures the distance to the
+swept plane: every replay's median is ≤ 0.012 m (p99 of medians 0.007),
+so `BLADE_MAX_M` = 0.02 m. Attributing cuts to hands by the same distance
+agrees with the replay's `saberType` on ≥ 98.6 % of cuts in every replay.
+
+**Left-handed replays.** All 48 on selected maps recover, all with the
+same measured transform: world mirrored **and** hands swapped. (The 30
+that passed the old check showed the same.)
+
+**Height (*approved*).** Hand y at hits rises 0.74 m per metre of median
+head height (layers 0/1/2: 0.74/0.73/0.72 m/m, r 0.81, n = 875).
+`height_median` is missing for 85 % of replays; median head y is always
+there and correlates with it at r 0.99. y is now scaled to `HEAD_Y_REF_M`
+= 1.60 m (pilot median 1.61 m) by the replay's median head y.
+
+**Zero first frame.** 298 of 875 BSORs start with an all-zero frame at
+t = 0. Its zero quaternions became NaN in a valid grid frame, the motion
+stats became NaN and training lost to NaN from the first step. Prepare now
+drops frames with any zero quaternion and rejects non-finite tracks.
+
+**GPU memory and batch (*approved*).** Peak memory is ≈ 0.85 + 0.25·B
+GiB for B windows: batch 64 needs ~16.8 GiB, so it spilled into shared
+system memory (< 0.17 steps/s at 87 W). Throughput is flat at ~143
+windows/s from B = 16, i.e. ~2.2 steps/s at 64 if it fitted. Batch 64 now
+runs as two micro-batches of 32 with the same gradient (§6.3): peak 10.1
+GB.
+
+**Throughput and data loading.** 15 min each, pilot tracks:
+
+| workers | steps/s | GPU util (mean / p10) | power |
+|---|---|---|---|
+| 4 (default) | 1.86 | 81 % / 31 % | 201 W |
+| 0 | 1.11 | 45 % / 1 % | 145 W |
+| 8 (10 min) | 1.79 | 82 % / 59 % | 235 W |
+
+The loader alone delivers 6.5 batches/s with 4 workers (1.1 GB/s), 3× what
+training draws, and 8 workers gain nothing, so the remaining gap to ~2.2
+steps/s is in the training step itself (the loss parts call `.item()` per
+micro-batch, which syncs the GPU), not the disk. Features are already on an
+internal SSD, so §6.6's copy does not apply. 1.86 steps/s is ~80k steps per
+12 h night, the planned `total_steps`.
+
+**Overfit check.** One train song (15 replays, 5 difficulties), 3,000
+steps, 28 min: loss 1.88 → 0.033, quick check on the song itself
+`val_timing_f` 0.935, rate ratio 0.93 (n = 5). The pipeline learns.
+
+**Pending (pilot night, Task 11 step 6).** Guidance chosen, pilot val
+criteria values, and your impression of the viewer pages.
 
 ---
 
