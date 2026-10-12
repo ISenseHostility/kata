@@ -39,6 +39,17 @@ def test_resumed_training_is_identical_to_straight_training(paths):
     assert torch.equal(sa["rng"]["cpu"], sb["rng"]["cpu"])
 
 
+def test_micro_batches_train_like_the_full_batch(paths):
+    # Batch 64 does not fit a 16 GB GPU; micro-batches of 32 must give the same steps (pilot, §16).
+    no_dropout = ModelConfig(**{**TINY.model.__dict__, "dropout": 0.0})
+    cfg = RunConfig(**{**TINY.__dict__, "model": no_dropout})
+    train(paths, "full", cfg, device="cpu", max_steps=3)
+    train(paths, "micro", RunConfig(**{**cfg.__dict__, "micro_batch": 1}), device="cpu", max_steps=3)
+    sa, sb = _state(paths, "full"), _state(paths, "micro")
+    assert all(torch.allclose(sa["model"][k], sb["model"][k], atol=1e-5) for k in sa["model"])
+    assert torch.equal(sa["rng"]["cpu"], sb["rng"]["cpu"])
+
+
 def test_run_guards_and_logs(paths):
     train(paths, "r", TINY, device="cpu", max_steps=3)
     with pytest.raises(ValueError, match="resume"):

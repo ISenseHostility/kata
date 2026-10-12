@@ -28,6 +28,7 @@ class RunConfig:
     window: int = WINDOW
     ctx: int = CTX
     batch: int = 64
+    micro_batch: int | None = None    # windows per forward/backward pass (None = batch); same gradient
     lr: float = 2e-4
     warmup: int = 2000
     total_steps: int = 80_000        # sets the lr schedule; a run may span nights (§6.4)
@@ -234,10 +235,16 @@ def train(paths: Paths, run_id: str, config: RunConfig | None = None, resume: bo
     model.train()
     for batch in batches:
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-        with amp:
-            loss, parts = diffusion.loss(model, batch, weights, c.p_uncond)
         opt.zero_grad(set_to_none=True)
-        loss.backward()
+        drawn = diffusion.draw(batch, c.p_uncond)
+        n, mb, n_hits = len(batch["x"]), c.micro_batch or len(batch["x"]), batch["hit_mask"].sum()
+        loss, parts = 0.0, {}
+        for i in range(0, n, mb):
+            with amp:
+                chunk, p = diffusion.chunk_loss(model, batch, drawn, weights, slice(i, i + mb), n_hits)
+            chunk.backward()
+            loss = loss + chunk.detach()
+            parts = {k: parts.get(k, 0.0) + v for k, v in p.items()}
         torch.nn.utils.clip_grad_norm_(model.parameters(), c.grad_clip)
         opt.step()
         sched.step()

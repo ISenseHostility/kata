@@ -69,22 +69,40 @@ class Diffusion:
     def loss(self, model, batch: dict, weights: LossWeights = LossWeights(),
              p_uncond: float = P_UNCOND) -> tuple[torch.Tensor, dict]:
         """batch: x (B,W,31), hit_mask (B,W,2), audio (B,W+2c,A), label (B,), nps (B,), all tensors."""
+        return self.chunk_loss(model, batch, self.draw(batch, p_uncond), weights)
+
+    def draw(self, batch: dict, p_uncond: float = P_UNCOND) -> dict:
+        """The batch's training randomness: timesteps, noise and condition dropout."""
         x0 = batch["x"]
         B = x0.shape[0]
         t = torch.randint(0, self.T, (B,), device=x0.device)
         noise = torch.randn_like(x0)
-        x_t = self.q_sample(x0, t, noise)
         label = torch.where(torch.rand(B, device=x0.device) < p_uncond,
                             torch.full_like(batch["label"], NONE_LABEL), batch["label"])
         nps_drop = torch.rand(B, device=x0.device) < p_uncond
-        pred = model(x_t, t, model.encode_audio(batch["audio"]), label, batch["nps"], nps_drop).float()
+        return {"t": t, "noise": noise, "label": label, "nps_drop": nps_drop}
+
+    def chunk_loss(self, model, batch: dict, drawn: dict, weights: LossWeights = LossWeights(),
+                   sl: slice = slice(None), n_hits: torch.Tensor | None = None) -> tuple[torch.Tensor, dict]:
+        """The loss of windows sl of the batch as its share of the whole batch's loss, so the chunks'
+        losses (and parts) sum to the full-batch loss: the mean terms are scaled by the chunk's
+        share of windows, the offset term is divided by the whole batch's hit frames (n_hits)."""
+        B = batch["x"].shape[0]
+        batch = {k: v[sl] for k, v in batch.items()}
+        drawn = {k: v[sl] for k, v in drawn.items()}
+        x0, t = batch["x"], drawn["t"]
+        frac = x0.shape[0] / B
+        x_t = self.q_sample(x0, t, drawn["noise"])
+        pred = model(x_t, t, model.encode_audio(batch["audio"]), drawn["label"], batch["nps"],
+                     drawn["nps_drop"]).float()
         dense = list(range(MOTION_DIM)) + list(HIT)
-        l_simple = (pred[..., dense] - x0[..., dense]).square().mean()
+        l_simple = frac * (pred[..., dense] - x0[..., dense]).square().mean()
         mask = batch["hit_mask"]
-        l_off = ((pred[..., list(OFF)] - x0[..., list(OFF)]).square() * mask).sum() / mask.sum().clamp(min=1)
+        n_hits = mask.sum() if n_hits is None else n_hits
+        l_off = ((pred[..., list(OFF)] - x0[..., list(OFF)]).square() * mask).sum() / n_hits.clamp(min=1)
         tip_p, tip_x = saber_tips(self.denorm(pred)), saber_tips(self.denorm(x0))
-        l_tip = (tip_p - tip_x).square().mean()
-        l_vel = (tip_p.diff(dim=1) - tip_x.diff(dim=1)).square().mean()
+        l_tip = frac * (tip_p - tip_x).square().mean()
+        l_vel = frac * (tip_p.diff(dim=1) - tip_x.diff(dim=1)).square().mean()
         total = l_simple + l_off + weights.tip * l_tip + weights.tip_vel * l_vel
         return total, {"l_simple": l_simple.item(), "l_off": l_off.item(), "l_tip": l_tip.item(),
                        "l_vel": l_vel.item()}

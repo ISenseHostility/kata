@@ -370,6 +370,11 @@ An epoch is defined as 1,000 steps; there is no notion of a full pass.
 - Batch 64 windows, bf16 autocast, AdamW (β = 0.9, 0.99, weight decay
   0.01), lr 2e-4, 2k warmup steps, cosine decay to 10 % over the run's
   planned steps.
+- **Micro-batches** of 32 (`micro_batch`; `kata motion train` default):
+  batch 64 needs ~16.8 GiB, over the training GPU's 16 GB (pilot, §16).
+  The batch's randomness (timesteps, noise, condition dropout) is drawn
+  once, and each chunk backpropagates its share of the batch's loss, so
+  the step is the full batch's.
 - **EMA** of the weights (decay 0.999); sampling and evaluation use the EMA
   copy.
 - Throughput estimate ~0.5 s per step ⇒ ~80k steps per 12 h night
@@ -629,6 +634,7 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-12 | — | Replays are not fetched until the pilot is done and you say go |
 | 2026-10-12 | — | Spec approved. Prototype corrections to §3.5, §3.7, §5.2–5.3, §6.4, §7.1–7.3, §9, §11 (§17) |
 | 2026-10-12 | — | Pilot (§16), approved by you: blade check measures the distance to the swept blade plane, `BLADE_MAX_M` = 0.02 m (§3.5); y normalised by median head height, `head_height` argument on the generator (§3.2). `MOTION_VERSION` v2 |
+| 2026-10-12 | — | Pilot, approved by you: batch 64 runs as 2 micro-batches of 32, same gradient (§6.3) |
 
 ---
 

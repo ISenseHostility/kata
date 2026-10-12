@@ -251,13 +251,16 @@ def motion_train(run: str = RUN, resume: bool = typer.Option(False, help="Contin
                  stems: bool = typer.Option(True, help="Use stem features (new runs only)."),
                  total_steps: int = typer.Option(80_000, help="Steps the lr schedule spans (new runs only)."),
                  batch: int = typer.Option(64, help="Windows per step (new runs only)."),
+                 micro_batch: int = typer.Option(32, help="Windows per forward/backward pass; 64 does not "
+                                                          "fit a 16 GB GPU (new runs only)."),
                  workers: int = typer.Option(4, help="DataLoader worker processes (new runs only)."),
                  only_song: list[str] = typer.Option([], help="Overfit check: train on this audio sha only.")):
     """Train a run overnight; resume it the next night with --resume (spec §6.4)."""
     from kata.motion import pipeline as mp
     from kata.motion.train import RunConfig
     config = None if resume else RunConfig(window=window, mirror_aug=mirror_aug, use_stems=stems, pilot=pilot,
-                                           total_steps=total_steps, batch=batch, workers=workers,
+                                           total_steps=total_steps, batch=batch, micro_batch=micro_batch,
+                                           workers=workers,
                                            only_songs=tuple(only_song))
     _run("motion-train", mp.train_stage, run=run, config=config, resume=resume, hours=hours, device=device)
 

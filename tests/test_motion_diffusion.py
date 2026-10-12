@@ -46,6 +46,31 @@ def test_loss_is_finite_and_offsets_count_only_at_hits():
     assert parts["l_off"] > 0
 
 
+def test_micro_batches_give_the_full_batch_loss_and_gradient():
+    torch.manual_seed(0)
+    model = MotionDenoiser(TINY)
+    B, W, C = 4, 16, 4
+    batch = {"x": torch.randn(B, W, 31), "hit_mask": torch.zeros(B, W, 2), "audio": torch.randn(B, W + 2 * C, 820),
+             "label": torch.tensor([0, 4, 2, 5]), "nps": torch.tensor([3.0, 8.0, 5.0, 6.0])}
+    batch["hit_mask"][0, 3, 1] = batch["hit_mask"][0, 9, 0] = batch["hit_mask"][3, 5, 1] = 1   # uneven hits per chunk
+    d = _diffusion()
+    torch.manual_seed(1)
+    total, parts = d.loss(model, batch, p_uncond=0.5)
+    total.backward()
+    full = [p.grad.clone() for p in model.parameters()]
+    model.zero_grad()
+    torch.manual_seed(1)
+    drawn = d.draw(batch, p_uncond=0.5)
+    n_hits = batch["hit_mask"].sum()
+    chunks = [d.chunk_loss(model, batch, drawn, sl=slice(i, i + 2), n_hits=n_hits) for i in (0, 2)]
+    for loss, _ in chunks:
+        loss.backward()
+    assert torch.allclose(sum(c[0] for c in chunks), total, atol=1e-6)
+    for k in parts:
+        assert sum(c[1][k] for c in chunks) == pytest.approx(parts[k], abs=1e-6)
+    assert all(torch.allclose(p.grad, g, atol=1e-6) for p, g in zip(model.parameters(), full))
+
+
 class Oracle(torch.nn.Module):
     """Predicts x0 = the absolute frame index (audio column 0) in channel 0, zeros elsewhere."""
 
