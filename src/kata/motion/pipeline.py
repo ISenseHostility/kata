@@ -149,11 +149,17 @@ def _evaluate(paths, state, summary, run, split="val", limit=None, device=None, 
     import time
 
     from kata.motion.evaluate import criteria, evaluate_samples
-    from kata.motion.sample import durations, eval_targets, generate, spread
+    from kata.motion.sample import ckpt_fingerprint, durations, eval_targets, generate, spread, stale_samples
     from kata.motion.train import Run
     if split == "test" and (paths.motion_runs / run / "eval_test.json").exists() and not force:
         raise ValueError(f"run {run} was already evaluated on test; re-running needs force=True and your approval")
-    targets = spread(eval_targets(paths, Run(paths, run), split), limit)
+    run_obj = Run(paths, run)
+    targets = spread(eval_targets(paths, run_obj, split), limit)
+    stale = stale_samples(_sample_dir(paths, run, split), targets, run_obj.guidance(), ckpt_fingerprint(run_obj))
+    if stale:                                                # never score (or spend test on) a partial set
+        raise FileNotFoundError(f"{len(stale)} of {3 * targets.height} samples missing or stale (guidance "
+                                f"{run_obj.guidance()}, ckpt/best.pt) in {_sample_dir(paths, run, split)}; "
+                                f"run `kata motion sample {run} --split {split}` first")
     rows, pooled = evaluate_samples(paths, run, split, targets, _sample_dir(paths, run, split))
     base_path = paths.processed / "baseline_eval.parquet"
     baseline = pl.read_parquet(base_path).filter(pl.col("split") == split) if base_path.exists() else None
@@ -191,7 +197,7 @@ final_stage = _with_state("motion-final", _final)
 
 def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
     """Generated (full, seed 0) next to the first real replay for n songs spread over tempo (§7.3).
-    Both clips show the same map notes, so the notes never give the real one away in blind mode."""
+    Both clips share the map notes; in blind mode they appear only after Reveal (viewer.page)."""
     import numpy as np
 
     from kata.motion.evaluate import real_hits
@@ -222,9 +228,9 @@ def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
         note_list = [[float(t), int(x), int(y), int(c), int(d)] for t, x, y, c, d in
                      kn.select("time_s", "x", "y", "color", "cut_dir").iter_rows()]
         real = clip(raw[:, :27], real_hits(raw, frame0[sid]), frame0[sid], note_list)
-        generated = clip(s["motion"], (s["hits_left"], s["hits_right"]), notes=note_list)   # both: blind-fair
+        generated = clip(s["motion"], (s["hits_left"], s["hits_right"]), notes=note_list)
         out = paths.reports / "motion-viewer" / f"{run}_{split}_{i:02d}_{key[0]}_{key[2]}.html"
-        write_page(out, f"{key[0]} {key[2]} ({run})", generated, real, ("generated", "real"), blind, seed=i)
+        write_page(out, f"{key[0]} {key[2]} ({run})", generated, real, ("generated", "real"), blind)
         written.append(str(out))
     summary.update(pages=written)
 

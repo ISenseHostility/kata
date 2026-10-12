@@ -99,7 +99,50 @@ def test_viewer_pages_and_report(trained):
     page = open(v["pages"][0], encoding="utf-8").read()
     assert "three@0.160.0" in page and '"blind":true' in page
     data = json.loads(re.search(r"const DATA = (\{.*?\});$", page, re.M).group(1))
-    assert data["clips"][0]["notes"] == data["clips"][1]["notes"] != []     # notes never reveal the real clip
+    # Only the real clip was played against the map, so its sabers meet the notes: in blind mode the
+    # notes stay hidden until Reveal, and neither clip carries them.
+    assert data["notes"] != [] and all("notes" not in c for c in data["clips"])
+    assert "showNotes = !DATA.blind" in page
     r = mp.report_stage(paths, name="t")
     text = open(r["path"], encoding="utf-8").read()
     assert "Acceptance criteria" in text and "Blade check" in text and "| r1 |" in text
+
+
+def _page_labels(path) -> list:
+    page = open(path, encoding="utf-8").read()
+    return json.loads(re.search(r"const DATA = (\{.*?\});$", page, re.M).group(1))["labels"]
+
+
+def test_blind_order_is_not_fixed_by_the_page_index(trained):
+    orders = {tuple(_page_labels(mp.viewer_stage(trained, run="r1", split="val", n=1)["pages"][0]))
+              for _ in range(20)}
+    assert orders == {("generated", "real"), ("real", "generated")}
+
+
+def test_stale_samples_are_regenerated(trained):
+    paths = trained
+    run_dir = paths.motion_runs / "r1"
+    g = json.loads((run_dir / "guidance.json").read_text())
+    (run_dir / "guidance.json").write_text(json.dumps({**g, "guidance": g["guidance"] + 1.0}))
+    assert mp.sample_stage(paths, run="r1", split="val", device="cpu")["jobs"] == 3       # new guidance
+    assert mp.sample_stage(paths, run="r1", split="val", device="cpu")["jobs"] == 0
+    import os
+    best = run_dir / "ckpt" / "best.pt"
+    st = best.stat()
+    os.utime(best, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))                          # a new best.pt
+    assert mp.sample_stage(paths, run="r1", split="val", device="cpu")["jobs"] == 3
+
+
+def test_evaluate_refuses_missing_or_stale_samples(trained):
+    paths = trained
+    run_dir = paths.motion_runs / "r1"
+    sample = next((paths.generated / "motion" / "r1" / "val").glob("*_full_1.npz"))
+    sample.unlink()
+    with pytest.raises(FileNotFoundError, match="1 of 3 samples"):
+        mp.evaluate_stage(paths, run="r1", split="val")
+    assert not (run_dir / "eval_val.json").exists()
+    mp.sample_stage(paths, run="r1", split="val", device="cpu")
+    g = json.loads((run_dir / "guidance.json").read_text())
+    (run_dir / "guidance.json").write_text(json.dumps({**g, "guidance": g["guidance"] + 1.0}))
+    with pytest.raises(FileNotFoundError, match="3 of 3 samples"):
+        mp.evaluate_stage(paths, run="r1", split="val")

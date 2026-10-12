@@ -33,12 +33,18 @@ def clip(motion: np.ndarray, hits: tuple, frame0: int = 0, notes: list | None = 
     return out
 
 
-def page(title: str, a: dict, b: dict, labels: tuple[str, str], blind: bool, seed: int = 0) -> str:
-    """One HTML page; with blind=True the clips are shown as A/B in random order until revealed."""
+def page(title: str, a: dict, b: dict, labels: tuple[str, str], blind: bool, seed: int | None = None) -> str:
+    """One HTML page; with blind=True the clips are shown as A/B in random order until revealed.
+
+    The order is fresh on every call unless a seed is given. The map's notes are shared by both
+    clips and, in blind mode, hidden until Reveal: only the real clip was played against them, so
+    its sabers meet the notes and the generated one's do not."""
     clips = [(a, labels[0]), (b, labels[1])]
     if blind:
-        random.Random(seed).shuffle(clips)
-    data = {"clips": [c for c, _ in clips], "labels": [lab for _, lab in clips], "blind": blind}
+        (random.SystemRandom() if seed is None else random.Random(seed)).shuffle(clips)
+    notes = a.get("notes") or b.get("notes") or []
+    data = {"clips": [{k: v for k, v in c.items() if k != "notes"} for c, _ in clips],
+            "labels": [lab for _, lab in clips], "notes": notes, "blind": blind}
     return TEMPLATE.replace("__TITLE__", html.escape(title)).replace("__THREE__", THREE_URL).replace(
         "__DATA__", json.dumps(data, separators=(",", ":")))
 
@@ -81,7 +87,7 @@ button { font: inherit; padding: 4px 12px; }
 import * as THREE from "__THREE__";
 const DATA = __DATA__;
 const audio = document.getElementById("audio");
-let playing = false, clock0 = 0, offset = 0;
+let playing = false, clock0 = 0, offset = 0, showNotes = !DATA.blind;
 const duration = Math.max(...DATA.clips.map(c => (c.frame0 + c.head.length / 7) / c.fps));
 const now = () => audio.src ? audio.currentTime : (playing ? offset + (performance.now() - clock0) / 1000 : offset);
 function makeView(canvas, c) {
@@ -100,7 +106,7 @@ function makeView(canvas, c) {
     const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({color: col, emissive: 0x000000}));
     scene.add(m); return m;
   });
-  const notes = c.notes.map(n => {
+  const notes = DATA.notes.map(n => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4),
       new THREE.MeshStandardMaterial({color: n[3] === 0 ? 0xd8332a : 0x2a6fd8, transparent: true, opacity: 0.8}));
     m.position.set((n[1] - 1.5) * 0.6, 0.25 + n[2] * 0.55, 0); scene.add(m); return [n[0], m];
@@ -120,7 +126,7 @@ function makeView(canvas, c) {
       const lit = hs.some(x => t >= x && t - x < 0.1);
       sabers[s].material.emissive.setHex(lit ? 0x666666 : 0x000000);
     });
-    for (const [tn, m] of notes) { const z = -(tn - t) * 10; m.visible = z < 0.5 && z > -30; m.position.z = z; }
+    for (const [tn, m] of notes) { const z = -(tn - t) * 10; m.visible = showNotes && z < 0.5 && z > -30; m.position.z = z; }
     renderer.render(scene, cam);
   }
   return draw;
@@ -129,7 +135,7 @@ const views = DATA.clips.map((c, k) => makeView(document.getElementById("c" + k)
 const tags = [0, 1].map(k => document.getElementById("t" + k));
 function label(reveal) { tags.forEach((el, k) => el.textContent = DATA.blind && !reveal ? ["A", "B"][k] : DATA.labels[k]); }
 label(false);
-if (DATA.blind) { const r = document.getElementById("reveal"); r.hidden = false; r.onclick = () => label(true); }
+if (DATA.blind) { const r = document.getElementById("reveal"); r.hidden = false; r.onclick = () => { label(true); showNotes = true; }; }
 document.getElementById("file").onchange = e => { audio.src = URL.createObjectURL(e.target.files[0]); };
 document.getElementById("play").onclick = () => {
   if (audio.src) { audio.paused ? audio.play() : audio.pause(); playing = !audio.paused; }

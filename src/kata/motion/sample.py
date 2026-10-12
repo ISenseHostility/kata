@@ -56,6 +56,12 @@ def durations(paths: Paths) -> dict[str, float]:
     return dict(zip(f["audio_sha256"], f["duration_s"]))
 
 
+def ckpt_fingerprint(run: Run, which: str = "best") -> str:
+    """Identifies the checkpoint a sample came from; changes whenever ckpt/{which}.pt is rewritten."""
+    st = (run.ckpt_dir / f"{which}.pt").stat()
+    return f"{which}:{st.st_size}:{st.st_mtime_ns}"
+
+
 class Generator:
     """A run's model, ready to sample whole songs in batches of jobs."""
 
@@ -64,6 +70,7 @@ class Generator:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.run = Run(paths, run_id)
         self.config = self.run.config()
+        self.ckpt = ckpt_fingerprint(self.run, which)
         self.model = self.run.load_model(which, self.device)
         self.diffusion = self.run.diffusion()
         self.norm = self.run.normaliser()
@@ -125,10 +132,33 @@ def _save_npz(path: Path, **arrays) -> None:
     os.replace(tmp, path)
 
 
+def _fresh(path: Path, guidance: float, ckpt: str) -> bool:
+    """The sample exists and was made with this guidance from this checkpoint."""
+    try:
+        with np.load(path) as z:
+            meta = json.loads(str(z["meta"]))
+    except (OSError, ValueError, KeyError):
+        return False
+    return meta.get("guidance") == guidance and meta.get("ckpt") == ckpt
+
+
+def _modes(r: dict, seeds, label_only: bool) -> list[tuple[str, int, float | None]]:
+    return [("full", s, r["nps"]) for s in seeds] + ([("label_only", 0, None)] if label_only else [])
+
+
+def stale_samples(out_dir: Path, targets: pl.DataFrame, guidance: float, ckpt: str, seeds=(0, 1),
+                  label_only: bool = True) -> list[Path]:
+    """Sample files of the targets that are missing or were made with other guidance or weights."""
+    return [p for r in targets.iter_rows(named=True) for mode, seed, _ in _modes(r, seeds, label_only)
+            if not _fresh(p := sample_path(out_dir, (r["hash"], r["characteristic"], r["difficulty"]), mode, seed),
+                          guidance, ckpt)]
+
+
 def sample_targets(gen: Generator, targets: pl.DataFrame, out_dir: Path, guidance: float, seeds=(0, 1),
                    label_only: bool = True, batch_jobs: int = 16, log=print) -> dict:
-    """Generate every target (mode 'full' per seed, plus 'label_only' seed 0) into out_dir; existing
-    files are kept, so an interrupted run resumes."""
+    """Generate every target (mode 'full' per seed, plus 'label_only' seed 0) into out_dir. Files made
+    with the same guidance from the same checkpoint are kept, so an interrupted run resumes; any
+    other file is regenerated."""
     out_dir.mkdir(parents=True, exist_ok=True)
     dur = durations(gen.run.paths)
     todo = []
@@ -136,13 +166,12 @@ def sample_targets(gen: Generator, targets: pl.DataFrame, out_dir: Path, guidanc
         key = (r["hash"], r["characteristic"], r["difficulty"])
         n = math.ceil(dur[r["audio_sha256"]] * FPS)
         label = LABELS.index(r["label"])
-        modes = [("full", s, r["nps"]) for s in seeds] + ([("label_only", 0, None)] if label_only else [])
-        for mode, seed, nps in modes:
+        for mode, seed, nps in _modes(r, seeds, label_only):
             path = sample_path(out_dir, key, mode, seed)
-            if not path.exists():
+            if not _fresh(path, guidance, gen.ckpt):
                 todo.append((path, Job(r["audio_sha256"], label, nps, seed, n),
                              {"key": list(key), "audio_sha256": r["audio_sha256"], "label": r["label"],
-                              "nps": nps, "seed": seed, "mode": mode, "guidance": guidance}))
+                              "nps": nps, "seed": seed, "mode": mode, "guidance": guidance, "ckpt": gen.ckpt}))
     import time
     t0 = time.monotonic()
     for i in range(0, len(todo), batch_jobs):
