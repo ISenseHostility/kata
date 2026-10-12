@@ -70,3 +70,14 @@ def test_blade_and_point_segment_distance():
     p = np.array([[0.1, 0.0, 0.5], [0.0, 0.0, 1.5], [0.0, 0.2, -0.3]])
     d = g.point_segment_distance(p, np.broadcast_to(origin, p.shape), np.broadcast_to(tip, p.shape))
     assert np.allclose(d, [0.1, 0.5, np.hypot(0.2, 0.3)])
+
+
+def test_swept_plane_distance():
+    base, tip, prev_tip = np.zeros(3), np.array([0.0, 0, 1]), np.array([0.0, 0.1, 1])   # swept plane x = 0
+    p = np.array([[0.0, 0.3, 1.4],                       # in the plane, beyond the tip: on the cut plane
+                  [0.05, 0.0, 0.5],                      # 5 cm off the plane
+                  [0.0, -0.2, -0.3]])                    # in the plane, behind the hand
+    d = g.swept_plane_distance(p, *(np.broadcast_to(v, p.shape) for v in (base, tip, prev_tip)))
+    assert np.allclose(d, [0.0, 0.05, 0.0])
+    still = g.swept_plane_distance(p, *(np.broadcast_to(v, p.shape) for v in (base, tip, tip)))
+    assert np.allclose(still, g.point_segment_distance(p, base, tip))   # no sweep: distance to the blade

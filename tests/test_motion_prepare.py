@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from kata.motion.prepare import (FPS, HIT, OFF, TRACK, MotionStore, Rejected, channel_stats,
+from kata.motion.prepare import (FPS, HEAD_Y_REF_M, HIT, OFF, TRACK, MotionStore, Rejected, channel_stats,
                                  mirror_note_id, motion_config, prepare_replay)
 from motion_synth import HAND_X, synth_notes, synth_replay
 
@@ -48,13 +48,32 @@ def test_left_handed_replays_are_recovered_whichever_way_the_game_mirrors(mode, 
 
 def test_broken_replays_are_rejected_with_a_reason():
     notes = synth_notes()
-    cases = {"frame_check": dict(mode="right_mirrored_world"), "blade_check": dict(saber_dy=0.5),
+    cases = {"frame_check": dict(mode="right_mirrored_world"), "blade_check": dict(saber_dx=0.05),
              "align_residual": dict(spawn_shift_s=0.01)}
     for reason, kw in cases.items():
         with pytest.raises(Rejected, match=reason):
             prepare_replay(synth_replay(notes, **kw), notes, left_handed=False)
     with pytest.raises(Rejected, match="align_match_rate"):           # left-handed flag on a normal replay
         prepare_replay(synth_replay(notes), notes, left_handed=True)
+
+
+def test_cut_points_beyond_the_tip_pass_the_blade_check():
+    # The game's cut point is the note centre projected onto the plane the blade swept, so it can
+    # lie past the 1 m tip (pilot: median 0.24 m from the blade segment, ~2 mm from the plane).
+    notes = synth_notes()
+    p = prepare_replay(synth_replay(notes, cut_z=1.4), notes, left_handed=False)
+    assert p.info["blade_median_m"] < 1e-3
+    assert not p.info["hands_swapped"]
+
+
+def test_heights_are_normalised_by_median_head_height():
+    notes = synth_notes()
+    ref = prepare_replay(synth_replay(notes), notes, left_handed=False)          # head at HEAD_Y_REF_M
+    tall = prepare_replay(synth_replay(notes, scale_y=1.1), notes, left_handed=False)
+    assert ref.info["head_y_median_m"] == pytest.approx(HEAD_Y_REF_M)
+    assert tall.info["head_y_median_m"] == pytest.approx(1.1 * HEAD_Y_REF_M)
+    assert tall.info["hand_y_l0"] == pytest.approx(1.1 * ref.info["hand_y_l0"])  # raw, for the §3.2 check
+    assert np.allclose(tall.data, ref.data, atol=1e-5)
 
 
 def test_tracking_gaps_are_flagged_not_dropped():

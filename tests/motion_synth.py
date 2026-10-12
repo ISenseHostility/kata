@@ -21,10 +21,13 @@ def hand_y(t):
 
 def synth_replay(notes: dict, mode: str = "right", fps: float = 90.0, seed: int = 0,
                  head_xz: tuple[float, float] = (0.35, 0.3), gap: tuple[float, float] | None = None,
-                 spawn_shift_s: float = 0.0, saber_dy: float = 0.0) -> Replay:
+                 spawn_shift_s: float = 0.0, saber_dx: float = 0.0, cut_z: float = 0.5,
+                 scale_y: float = 1.0) -> Replay:
     """mode: 'right' (a normal replay); 'mirror_all' (left-handed: ids, world and hands mirrored);
     'mirror_ids' (left-handed: only the note ids mirrored); 'right_mirrored_world' (a broken
-    right-handed replay whose frames are mirrored)."""
+    right-handed replay whose frames are mirrored). saber_dx moves both sabers outwards, off the
+    cut points' plane; cut_z puts the cut points along the swept plane (beyond the 1 m tip when
+    > 1); scale_y scales every height, as for a taller player."""
     rng = np.random.default_rng(seed)
     t = np.sort(np.arange(0.0, notes["time_s"].max() + 1.5, 1 / fps) + rng.uniform(-0.002, 0.002))
     if gap is not None:
@@ -33,9 +36,9 @@ def synth_replay(notes: dict, mode: str = "right", fps: float = 90.0, seed: int 
     f = np.zeros(len(t), dtype=FRAME_DTYPE)
     f["t"] = t
     f["fps"] = int(fps)
-    f["head_px"], f["head_py"], f["head_pz"] = head_xz[0], 1.6, head_xz[1]
+    f["head_px"], f["head_py"], f["head_pz"] = head_xz[0], 1.6 * scale_y, head_xz[1]
     for name, x in zip(("left", "right"), HAND_X):
-        f[f"{name}_px"], f[f"{name}_py"], f[f"{name}_pz"] = x, hand_y(t) + saber_dy, 0.0
+        f[f"{name}_px"], f[f"{name}_py"], f[f"{name}_pz"] = x + np.sign(x) * saber_dx, hand_y(t) * scale_y, 0.0
     for name in ("head", "left", "right"):
         f[f"{name}_qw"] = 1.0
     mirror_world = mode in ("mirror_all", "right_mirrored_world")
@@ -55,7 +58,7 @@ def synth_replay(notes: dict, mode: str = "right", fps: float = 90.0, seed: int 
         cx = HAND_X[int(c)] * (-1 if mirror_world else 1)
         events.append({"note_id": nid, "event_time": et, "spawn_time": float(ts) + spawn_shift_s,
                        "event_type": EVENT_GOOD, "saber_type": int(c), "cut_point_x": cx,
-                       "cut_point_y": float(hand_y(et)), "cut_point_z": 0.5})
+                       "cut_point_y": float(hand_y(et)) * scale_y, "cut_point_z": cut_z})
     info = {"leftHanded": mode in ("mirror_all", "mirror_ids"), "height": 1.75}
     return Replay(info, f, events, [], [(1.75, 0.0)], [])
 
@@ -110,16 +113,16 @@ def write_root(p, n_notes: int = 40) -> dict:
     for sha, _ in SONGS.values():
         write_features(p, sha, duration)
     write_audio_stats(p)
-    replays = [  # score_id, hash, mode, status, reject_reason, saber_dy
+    replays = [  # score_id, hash, mode, status, reject_reason, saber_dx
         ("1", "h1", "right", "ok", None, 0.0),
         ("2", "h1", "mirror_all", "rejected", "left_handed,align_match_rate", 0.0),
         ("3", "h1", "right", "rejected", "hash_mismatch", 0.0),
-        ("4", "h1", "right", "ok", None, 0.5),
+        ("4", "h1", "right", "ok", None, 0.05),
         ("5", "h2", "right", "ok", None, 0.0),
     ]
-    for sid, h, mode, _status, _reason, dy in replays:
+    for sid, h, mode, _status, _reason, dx in replays:
         (p.replays / h).mkdir(parents=True, exist_ok=True)
-        r = synth_replay(notes, mode=mode, saber_dy=dy, seed=int(sid))
+        r = synth_replay(notes, mode=mode, saber_dx=dx, seed=int(sid))
         (p.replays / h / f"{sid}.bsor").write_bytes(bsor.write(r))
     pl.DataFrame({"score_id": [r[0] for r in replays], "hash": [r[1] for r in replays],
                   "characteristic": ["Standard"] * 5, "difficulty": ["Expert"] * 5,

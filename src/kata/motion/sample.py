@@ -16,7 +16,7 @@ from kata.config import Paths
 from kata.motion.dataset import WindowSampler, decode_hits
 from kata.motion.diffusion import Job, sample_long
 from kata.motion.geometry import rot6_to_matrix
-from kata.motion.prepare import FPS, HIT, OFF, TRACK, MotionStore
+from kata.motion.prepare import FPS, HEAD_Y_REF_M, HIT, OFF, TRACK, MotionStore
 from kata.motion.train import Run
 from kata.validate.rules import LABELS
 
@@ -37,11 +37,15 @@ class MotionTrack:
     hits_right: np.ndarray
 
 
-def to_track(motion: np.ndarray, hits_left: np.ndarray, hits_right: np.ndarray) -> MotionTrack:
+def to_track(motion: np.ndarray, hits_left: np.ndarray, hits_right: np.ndarray,
+             head_height: float | None = None) -> MotionTrack:
+    """Heights are generated for a player whose median head height is HEAD_Y_REF_M (§3.2);
+    head_height scales them to another player."""
+    y_scale = 1.0 if head_height is None else head_height / HEAD_Y_REF_M
     parts = {}
     for part in ("head", "left", "right"):
         s = TRACK[part].start
-        parts[f"{part}_pos"] = motion[:, s:s + 3].astype(np.float64)
+        parts[f"{part}_pos"] = motion[:, s:s + 3].astype(np.float64) * [1.0, y_scale, 1.0]
         parts[f"{part}_rot"] = rot6_to_matrix(motion[:, s + 3:s + 9])
     return MotionTrack(np.arange(len(motion)) / FPS, **parts, hits_left=np.sort(hits_left),
                        hits_right=np.sort(hits_right))
@@ -92,14 +96,16 @@ class Generator:
 
 
 def generate(audio_sha256: str, label: str | None, nps: float | None, seed: int = 0, guidance: float | None = None,
-             run: str | None = None, paths: Paths | None = None, device: str | None = None) -> MotionTrack:
-    """Phase 5's entry point (§5.7): one whole song at one difficulty."""
+             run: str | None = None, paths: Paths | None = None, device: str | None = None,
+             head_height: float | None = None) -> MotionTrack:
+    """Phase 5's entry point (§5.7): one whole song at one difficulty, for a player with this
+    median head height (default HEAD_Y_REF_M, about the train median)."""
     paths = paths or Paths()
     gen = Generator(paths, run or final_run(paths), device=device)
     n = math.ceil(durations(paths)[audio_sha256] * FPS)
     job = Job(audio_sha256, None if label is None else LABELS.index(label), nps, seed, n)
     out = gen.run_jobs([job], gen.run.guidance() if guidance is None else guidance)[0]
-    return to_track(out["motion"], out["hits_left"], out["hits_right"])
+    return to_track(out["motion"], out["hits_left"], out["hits_right"], head_height)
 
 
 # --------------------------------------------------------------------------- split sampling (§7.1)

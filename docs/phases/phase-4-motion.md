@@ -134,16 +134,18 @@ second 100 fps audio frame).
   frame; mirroring (§3.5) is defined in these axes.
 - **Centring**: subtract the replay's median head x and z from every
   position. This removes where the player stands in the room.
-- **Height**: y stays absolute, because notes arrive at fixed world
-  heights. **[verify in pilot]**: regress hand y at hits on
-  `height_median`, per note layer. If the slope is clearly non-zero, y is
-  normalised by `height_median` instead, and the generator takes a height
-  argument (default: the train median).
+- **Height**: every y is scaled by `HEAD_Y_REF_M / median head y` of the
+  replay, `HEAD_Y_REF_M` = 1.60 m (the pilot median head height, 1.61 m).
+  The generator takes a `head_height` argument (default `HEAD_Y_REF_M`).
+  The pilot measured it (§16): hand y at hits rises 0.74 m per metre of head
+  height (r 0.81, every layer). `height_median` would have been the
+  normaliser, but it is missing for 85 % of pilot replays; median head y is
+  always there and correlates with it at r 0.99.
 - **Hands are world-anchored** (D8): saber positions are in the centred
   play-space frame, not relative to the head.
-- **Saber offsets** (BSOR section 6) are not applied. **[verify in pilot]**
-  with the blade check (§3.5): if the recorded pose does not put the blade
-  through the note at cut time, apply the offsets and re-check.
+- **Saber offsets** (BSOR section 6) are not applied: the recorded poses
+  already include them (pilot, §16; applying them again moves the blade
+  off the cut plane).
 
 ### 3.3 Per-frame vector (31 channels)
 
@@ -196,12 +198,16 @@ only known from the BSOR. `prepare` re-parses their BSORs from
    rejected as `frame_check`. A left-handed replay gets whatever transform
    it measures. **[verify in pilot]** which combination the game produces.
 3. **Blade check** (all replays): at each matched cut, the distance from
-   the BSOR cut point (`cut_point_x/y/z`, the game's own record of where
-   the blade met the note) to the segment from saber origin to blade tip.
-   Blade = 1 m along the saber's local +z **[verify in pilot]**. No note
-   grid geometry is needed. A replay passes when the median distance is
-   ≤ `BLADE_MAX_M` = 0.30 m **[tune in pilot]**: the pilot sets it from
-   the distribution of accepted right-handed replays.
+   the BSOR cut point (`cut_point_x/y/z`) to the plane the cutting blade
+   swept: the plane through the blade at the cut and its tip `SWEEP_S` =
+   1/90 s earlier (the segment distance where the blade did not move).
+   The game records the note centre projected onto that cut plane, so the
+   point lies on the plane but often beyond the tip: the pilot measured a
+   median 0.24 m to the blade segment and ~2 mm to the plane (§16). Blade
+   = 1 m along the saber's local +z (pilot-verified). No note grid geometry
+   is needed. A replay passes when the median distance is ≤ `BLADE_MAX_M` =
+   0.02 m (pilot: every replay ≤ 0.012 m; a wrong axis gives 0.3–0.4 m).
+   The same distance attributes cuts to hands for the frame check above.
 
 The same reflection, applied to a right-handed replay together with its
 map, is **mirror augmentation**. It is off by default and gets one ablation
@@ -209,16 +215,16 @@ map, is **mirror augmentation**. It is off by default and gets one ablation
 
 ### 3.6 Normalisation
 
-`motion/v1/stats.json` holds per-channel mean and std of the 27 motion
+`motion/v2/stats.json` holds per-channel mean and std of the 27 motion
 channels over **train only**. They are applied at load time, as Phase 2
 does for audio. Hit pulses map to [−1, 1]; offsets are multiplied by 2.
 
 ### 3.7 Tables and arrays
 
-- `motion/v1/{score_id}.npy`: (T, 31) fp16, one per accepted replay
+- `motion/v2/{score_id}.npy`: (T, 31) fp16, one per accepted replay
   (Standard characteristic only, as Phase 1 selects).
   fp16 keeps positions to ~0.5 mm at 1 m.
-- `motion/v1/{score_id}.valid.npy`: (T,) bool.
+- `motion/v2/{score_id}.valid.npy`: (T,) bool.
 - `processed/motion_tracks.parquet`: `score_id, hash, characteristic,
   difficulty, split, label, nps, hps, n_frames, n_valid, n_hits_left,
   n_hits_right, mirrored, blade_median_m, status, reject_reason,
@@ -226,7 +232,8 @@ does for audio. Hit pulses map to [−1, 1]; offsets are multiplied by 2.
 
 The table also carries the check results per replay: `world_mirrored`,
 `hands_swapped`, `blade_median_m`, `hand_y_l0..2` (mean saber height at
-cuts per note layer, for the §3.2 height question) and `height_median`.
+cuts per note layer, raw, for the §3.2 height question), `head_y_median_m`
+(the normaliser) and `height_median`.
 
 `nps` is the difficulty's song-level density: notes ÷ (last note time −
 first note time), computed by Phase 3's own `kata.validate.rules.nps`, so
@@ -621,6 +628,7 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-12 | D10 | Hit time is the matched note's map time |
 | 2026-10-12 | — | Replays are not fetched until the pilot is done and you say go |
 | 2026-10-12 | — | Spec approved. Prototype corrections to §3.5, §3.7, §5.2–5.3, §6.4, §7.1–7.3, §9, §11 (§17) |
+| 2026-10-12 | — | Pilot (§16), approved by you: blade check measures the distance to the swept blade plane, `BLADE_MAX_M` = 0.02 m (§3.5); y normalised by median head height, `head_height` argument on the generator (§3.2). `MOTION_VERSION` v2 |
 
 ---
 

@@ -26,15 +26,15 @@ def _tracks_section(paths: Paths, suffix: str) -> list[str]:
             f"hands swapped: {ok.filter(pl.col('hands_swapped')).height}).", ""]
     if ok.height:
         b = ok["blade_median_m"].to_numpy()
-        out += ["**Blade check** (median cut point to blade, m): " +
+        out += ["**Blade check** (median cut point to swept blade plane, m): " +
                 ", ".join(f"p{q} {np.percentile(b, q):.3f}" for q in (5, 50, 95, 99)), ""]
         rows = []
         for k in range(3):
-            sub = ok.drop_nulls(["height_median", f"hand_y_l{k}"])
-            if sub.height >= 3 and sub["height_median"].n_unique() >= 2:
-                slope, icpt = np.polyfit(sub["height_median"].to_numpy(), sub[f"hand_y_l{k}"].to_numpy(), 1)
+            sub = ok.drop_nulls(["head_y_median_m", f"hand_y_l{k}"])
+            if sub.height >= 3 and sub["head_y_median_m"].n_unique() >= 2:
+                slope, icpt = np.polyfit(sub["head_y_median_m"].to_numpy(), sub[f"hand_y_l{k}"].to_numpy(), 1)
                 rows.append({"layer": k, "n": sub.height, "slope_m_per_m": float(slope), "intercept_m": float(icpt)})
-        out += ["**Hand height at hits vs. player height** (spec §3.2):", "",
+        out += ["**Hand height at hits vs. median head height** (raw, before normalising; spec §3.2):", "",
                 md_table(pl.DataFrame(rows)) if rows else "_(too few tracks)_", ""]
     return out
 

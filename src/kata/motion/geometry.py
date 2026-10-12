@@ -146,3 +146,14 @@ def point_segment_distance(p, a, b) -> np.ndarray:
     u = ((p - a) * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-12)
     closest = a + u.clip(0.0, 1.0)[..., None] * ab
     return np.linalg.norm(p - closest, axis=-1)
+
+
+def swept_plane_distance(p, base, tip, prev_tip) -> np.ndarray:
+    """Distance from points p to the plane through the blade base-tip and the previous tip, all
+    (..., 3): the game's cut plane, on which it records the cut point. Where the blade has not
+    swept (no plane), the distance to the blade segment instead."""
+    n = np.cross(tip - base, prev_tip - base)
+    norm = np.linalg.norm(n, axis=-1)
+    swept = norm > 1e-6
+    d = np.abs(((p - base) * n).sum(-1)) / np.where(swept, norm, 1.0)
+    return np.where(swept, d, point_segment_distance(p, base, tip))

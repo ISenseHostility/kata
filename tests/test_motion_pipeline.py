@@ -91,6 +91,21 @@ def test_sampling_resumes_evaluation_replaces_and_generate_works(trained):
     assert track.left_rot.shape == (len(track.t), 3, 3) and track.t[1] == pytest.approx(0.02)
 
 
+def test_tracks_are_scaled_to_a_head_height():
+    from kata.motion.prepare import HEAD_Y_REF_M
+    from kata.motion.sample import to_track
+    motion = np.zeros((5, 27), np.float32)
+    for s in (0, 9, 18):                                   # identity rot6 for head, left, right
+        motion[:, s + 3] = motion[:, s + 7] = 1.0
+    motion[:, 0:3] = [0.1, 1.6, 0.2]
+    motion[:, 9:12] = [0.3, 1.0, 0.4]
+    ref = to_track(motion, np.array([]), np.array([]))
+    tall = to_track(motion, np.array([]), np.array([]), head_height=1.1 * HEAD_Y_REF_M)
+    assert ref.head_pos[0, 1] == pytest.approx(1.6) and ref.left_pos[0, 1] == pytest.approx(1.0)
+    assert tall.head_pos[0, 1] == pytest.approx(1.76) and tall.left_pos[0, 1] == pytest.approx(1.1)
+    assert tall.left_pos[0, 0] == pytest.approx(0.3) and tall.left_pos[0, 2] == pytest.approx(0.4)
+
+
 def test_viewer_pages_and_report(trained):
     paths = trained
     mp.evaluate_stage(paths, run="r1", split="val")
@@ -106,6 +121,7 @@ def test_viewer_pages_and_report(trained):
     r = mp.report_stage(paths, name="t")
     text = open(r["path"], encoding="utf-8").read()
     assert "Acceptance criteria" in text and "Blade check" in text and "| r1 |" in text
+    assert "Hand height at hits vs. median head height" in text
 
 
 def _page_labels(path) -> list:

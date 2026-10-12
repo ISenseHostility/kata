@@ -18,13 +18,15 @@ from kata.data.align import align
 from kata.data.bsor import EVENT_BAD, EVENT_BOMB, EVENT_GOOD, Replay, decode_note_id
 from kata.data.pipeline import ALIGN_MAX_P95_MS, ALIGN_MIN_MATCH_RATE
 from kata.motion.geometry import (MIRROR_CUT, blade, interpolate, matrix_to_rot6, monotonic,
-                                  point_segment_distance, quat_to_matrix, reflect_x, resample)
+                                  quat_to_matrix, reflect_x, resample, swept_plane_distance)
 
-MOTION_VERSION = "v1"
+MOTION_VERSION = "v2"
 FPS = 50
 MAX_GAP_S = 0.1
-BLADE_MAX_M = 0.30          # median cut-point-to-blade distance; [verify in pilot] (spec §3.5)
+BLADE_MAX_M = 0.02          # median cut point to swept blade plane; pilot: all replays <= 0.012 (spec §3.5)
+SWEEP_S = 1 / 90            # the swept plane runs through the tip this long before the cut
 MIN_CUTS = 10
+HEAD_Y_REF_M = 1.60         # heights are scaled to this median head height (pilot median 1.61 m; spec §3.2)
 PARTS = ("head", "left", "right")
 N_CHANNELS = 31
 MOTION_DIM = 27
@@ -40,7 +42,9 @@ def motion_config() -> dict:
     from kata.motion import geometry
     return {"version": MOTION_VERSION, "fps": FPS, "max_gap_s": MAX_GAP_S, "blade_max_m": BLADE_MAX_M,
             "blade_length_m": geometry.BLADE_LENGTH_M, "blade_axis": geometry.BLADE_AXIS,
+            "blade_check": "median cut point to swept blade plane", "sweep_s": SWEEP_S,
             "min_cuts": MIN_CUTS, "channels": list(CHANNELS), "centre": "median head x,z",
+            "height": "y scaled by head_y_ref_m / median head y", "head_y_ref_m": HEAD_Y_REF_M,
             "hit_time": "map time of the matched note", "align_min_match_rate": ALIGN_MIN_MATCH_RATE,
             "align_max_p95_ms": ALIGN_MAX_P95_MS}
 
@@ -100,8 +104,10 @@ def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bo
     cp = np.array([[events[i][f"cut_point_{c}"] for c in "xyz"] for i in cuts], dtype=np.float64)
     idx = res.matched_idx[cuts]
     p_at, q_at, _ = interpolate(t, pos, quat, ct)
-    rot = quat_to_matrix(q_at)
-    dist = np.stack([point_segment_distance(cp, *blade(p_at[:, k], rot[:, k])) for k in (1, 2)], 1)
+    p_prev, q_prev, _ = interpolate(t, pos, quat, ct - SWEEP_S)
+    rot, rot_prev = quat_to_matrix(q_at), quat_to_matrix(q_prev)
+    dist = np.stack([swept_plane_distance(cp, *blade(p_at[:, k], rot[:, k]), blade(p_prev[:, k], rot_prev[:, k])[1])
+                     for k in (1, 2)], 1)
     hand = dist.argmin(1)                                   # 0 = left track, 1 = right track
     color = np.asarray(notes["color"])[idx]
     lane = np.asarray(notes["x"], dtype=np.float64)[idx] - 1.5
@@ -125,6 +131,8 @@ def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bo
         raise Rejected("no_valid_frames")
     p[..., 0] -= np.median(p[valid, 0, 0])
     p[..., 2] -= np.median(p[valid, 0, 2])
+    head_y = float(np.median(p[valid, 0, 1]))
+    p[..., 1] *= HEAD_Y_REF_M / head_y
     data = np.zeros((len(p), N_CHANNELS), dtype=np.float32)
     for k, part in enumerate(PARTS):
         s = TRACK[part].start
@@ -144,7 +152,7 @@ def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bo
     info = {"n_frames": len(data), "n_valid": int(valid.sum()),
             "n_hits_left": int((data[:, HIT[0]] > 0).sum()), "n_hits_right": int((data[:, HIT[1]] > 0).sum()),
             "mirrored": left_handed, "world_mirrored": world_mirrored, "hands_swapped": hands_swapped,
-            "blade_median_m": blade_median, **hand_y}
+            "blade_median_m": blade_median, "head_y_median_m": head_y, **hand_y}
     return Prepared(frame0, data, valid, np.unique(hit_t[inside]), info)
 
 
