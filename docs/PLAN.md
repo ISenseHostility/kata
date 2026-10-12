@@ -32,13 +32,14 @@ Goal: a playability scorer and a baseline mapper to beat.
 
 ## Phase 4 — Motion model
 Goal: generate plausible hand trajectories from music.
-- Prerequisite: fetch BeatLeader replays (Tier A, K = 3). This was
-  deferred from Phase 1; see docs/phases/phase-1-data.md §13.
-- Motion representation (positions + 6D rotations, head-relative)
-- Diffusion transformer with audio cross-attention
-- Start small (~50M params, 8-bar windows)
-  ⚠️ Detailed plan needed: architecture, window length, conditioning,
-  training budget, evaluation metrics, what counts as "good enough".
+- Prerequisite: fetch BeatLeader replays (Tier A, K = 3), after the pilot
+  on the replays already on disk. Deferred from Phase 1; see
+  docs/phases/phase-1-data.md §13.
+- Motion + per-hand hit channel; world-anchored positions + 6D rotations
+- EDGE-style diffusion transformer with audio cross-attention, ~45M params
+- 12.8 s windows; difficulty label + NPS controls; overnight runs only
+  📝 Design doc: docs/phases/phase-4-motion.md (draft 2026-10-12, in
+  review).
 
 ## Phase 5 — Motion → map
 Goal: playable maps derived from generated motion.
