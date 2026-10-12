@@ -19,6 +19,8 @@ validate = typer.Typer(no_args_is_help=True, help="Phase 3 validator stages.")
 app.add_typer(validate, name="validate")
 baseline = typer.Typer(no_args_is_help=True, help="Phase 3 rule-based baseline mapper.")
 app.add_typer(baseline, name="baseline")
+motion = typer.Typer(no_args_is_help=True, help="Phase 4 motion model (all but `prepare` need `uv sync --extra audio`).")
+app.add_typer(motion, name="motion")
 
 PILOT = typer.Option(False, "--pilot", help="Restrict to the deterministic pilot subset.")
 
@@ -223,3 +225,88 @@ def validate_pilot():
                               ("baseline-generate", bp.generate_stage, {"pilot": True}),
                               ("validate-report", vp.report_stage, {"name": "phase3-pilot", "calibration": "fit"})]:
         _run(stage, fn, **kwargs)
+
+
+# --------------------------------------------------------------------------- Phase 4
+# kata.motion.prepare is numpy-only; training, sampling and evaluation import torch inside each stage.
+
+RUN = typer.Argument(..., help="Run id: a folder under runs/motion/.")
+DEVICE = typer.Option(None, help="Torch device (default: cuda when available).")
+
+
+@motion.command("prepare")
+def motion_prepare(pilot: bool = PILOT):
+    """Replays -> 50 fps motion tracks, motion_tracks.parquet and train stats (spec §3)."""
+    from kata.motion import pipeline as mp
+    _run("motion-prepare", mp.prepare_stage, pilot=pilot)
+
+
+@motion.command("train")
+def motion_train(run: str = RUN, resume: bool = typer.Option(False, help="Continue from ckpt/last.pt."),
+                 hours: float = typer.Option(None, help="Stop cleanly after this many hours."),
+                 device: str = typer.Option("cuda", help="Torch device."),
+                 pilot: bool = typer.Option(False, help="Train on the pilot tracks (new runs only)."),
+                 window: int = typer.Option(640, help="Window in 50 fps frames (new runs only)."),
+                 mirror_aug: bool = typer.Option(False, help="Mirror augmentation (new runs only)."),
+                 stems: bool = typer.Option(True, help="Use stem features (new runs only)."),
+                 total_steps: int = typer.Option(80_000, help="Steps the lr schedule spans (new runs only)."),
+                 batch: int = typer.Option(64, help="Windows per step (new runs only)."),
+                 workers: int = typer.Option(4, help="DataLoader worker processes (new runs only)."),
+                 only_song: list[str] = typer.Option([], help="Overfit check: train on this audio sha only.")):
+    """Train a run overnight; resume it the next night with --resume (spec §6.4)."""
+    from kata.motion import pipeline as mp
+    from kata.motion.train import RunConfig
+    config = None if resume else RunConfig(window=window, mirror_aug=mirror_aug, use_stems=stems, pilot=pilot,
+                                           total_steps=total_steps, batch=batch, workers=workers,
+                                           only_songs=tuple(only_song))
+    _run("motion-train", mp.train_stage, run=run, config=config, resume=resume, hours=hours, device=device)
+
+
+@motion.command("tune")
+def motion_tune(run: str = RUN, device: str = DEVICE):
+    """Pick the guidance weight on 50 val difficulties -> runs/motion/{run}/guidance.json (spec §7.1)."""
+    from kata.motion import pipeline as mp
+    _run("motion-tune", mp.tune_stage, run=run, device=device)
+
+
+@motion.command("sample")
+def motion_sample(run: str = RUN, split: str = typer.Option("val", help="val or test."),
+                  limit: int = typer.Option(None, help="Only this many difficulties, evenly spread."),
+                  device: str = DEVICE):
+    """Whole songs for every difficulty of the split -> generated/motion/{run}/{split}/ (resumable)."""
+    from kata.motion import pipeline as mp
+    _run("motion-sample", mp.sample_stage, run=run, split=split, limit=limit, device=device)
+
+
+@motion.command("evaluate")
+def motion_evaluate(run: str = RUN, split: str = typer.Option("val", help="val or test (test: once, §8)."),
+                    device: str = DEVICE,
+                    force: bool = typer.Option(False, help="Re-evaluate test (only with approval).")):
+    """Metrics and acceptance criteria -> motion_eval.parquet, runs/motion/{run}/eval_{split}.json."""
+    from kata.motion import pipeline as mp
+    _run("motion-evaluate", mp.evaluate_stage, run=run, split=split, device=device, force=force)
+
+
+@motion.command("final")
+def motion_final(run: str = RUN):
+    """Mark the run generate() uses by default."""
+    from kata.motion import pipeline as mp
+    _run("motion-final", mp.final_stage, run=run)
+
+
+@motion.command("viewer")
+def motion_viewer(run: str = RUN, split: str = typer.Option("test", help="val or test."),
+                  n: int = typer.Option(6, help="Songs, spread over tempo."),
+                  blind: bool = typer.Option(True, help="Show clips as A/B until revealed.")):
+    """Generated vs. real 3D viewer pages -> reports/motion-viewer/ (spec §7.3)."""
+    from kata.motion import pipeline as mp
+    _run("motion-viewer", mp.viewer_stage, run=run, split=split, n=n, blind=blind)
+
+
+@motion.command("report")
+def motion_report(name: str = typer.Option("phase4", help="Report file name prefix."),
+                  run: str = typer.Option(None, help="Run to report (default: the final run)."),
+                  pilot: bool = PILOT):
+    """Phase 4 Markdown report under reports/."""
+    from kata.motion import pipeline as mp
+    _run("motion-report", mp.report_stage, name=name, run=run, pilot=pilot)

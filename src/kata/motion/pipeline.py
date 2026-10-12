@@ -187,3 +187,52 @@ def _final(paths, state, summary, run):
     summary["final"] = run
 
 final_stage = _with_state("motion-final", _final)
+
+
+def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
+    """Generated (full, seed 0) next to the first real replay for n songs spread over tempo (§7.3).
+    Both clips show the same map notes, so the notes never give the real one away in blind mode."""
+    import numpy as np
+
+    from kata.motion.evaluate import real_hits
+    from kata.motion.sample import eval_targets, load_sample, sample_path, spread
+    from kata.motion.train import Run, tracks_table
+    from kata.motion.viewer import clip, write_page
+    targets = eval_targets(paths, Run(paths, run), split)
+    tempo = paths.processed / "audio_tempo.parquet"
+    if tempo.exists():
+        targets = targets.join(pl.read_parquet(tempo).select("audio_sha256", "est_bpm"), on="audio_sha256",
+                               how="left").sort("est_bpm", nulls_last=True)
+    targets = targets.unique("audio_sha256", keep="first", maintain_order=True)
+    store = MotionStore(paths.motion)
+    meta = tracks_table(paths, Run(paths, run).config().pilot).select("score_id", "frame0")
+    frame0 = dict(zip(meta["score_id"], meta["frame0"]))
+    notes = pl.read_parquet(paths.processed / "notes.parquet")
+    written = []
+    for i, r in enumerate(spread(targets, n).iter_rows(named=True)):
+        key = (r["hash"], r["characteristic"], r["difficulty"])
+        path = sample_path(_sample_dir(paths, run, split), key, "full", 0)
+        if not path.exists():
+            continue
+        s = load_sample(path)
+        sid = r["score_ids"][0]
+        raw = np.asarray(store.load(sid), np.float32)
+        kn = notes.filter((pl.col("hash") == key[0]) & (pl.col("characteristic") == key[1])
+                          & (pl.col("difficulty") == key[2]))
+        note_list = [[float(t), int(x), int(y), int(c), int(d)] for t, x, y, c, d in
+                     kn.select("time_s", "x", "y", "color", "cut_dir").iter_rows()]
+        real = clip(raw[:, :27], real_hits(raw, frame0[sid]), frame0[sid], note_list)
+        generated = clip(s["motion"], (s["hits_left"], s["hits_right"]), notes=note_list)   # both: blind-fair
+        out = paths.reports / "motion-viewer" / f"{run}_{split}_{i:02d}_{key[0]}_{key[2]}.html"
+        write_page(out, f"{key[0]} {key[2]} ({run})", generated, real, ("generated", "real"), blind, seed=i)
+        written.append(str(out))
+    summary.update(pages=written)
+
+viewer_stage = _with_state("motion-viewer", _viewer)
+
+
+def _report(paths, state, summary, name="phase4", run=None, pilot=False):
+    from kata.motion.report import write_report
+    summary["path"] = str(write_report(paths, state, name, run, pilot))
+
+report_stage = _with_state("motion-report", _report)

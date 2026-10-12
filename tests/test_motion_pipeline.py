@@ -1,5 +1,6 @@
 """Phase 4 stages on a tiny synthetic data root."""
 import json
+import re
 
 import numpy as np
 import polars as pl
@@ -88,3 +89,17 @@ def test_sampling_resumes_evaluation_replaces_and_generate_works(trained):
     mp.final_stage(paths, run="r1")
     track = generate("b" * 64, "Expert", 2.0, paths=paths, device="cpu")
     assert track.left_rot.shape == (len(track.t), 3, 3) and track.t[1] == pytest.approx(0.02)
+
+
+def test_viewer_pages_and_report(trained):
+    paths = trained
+    mp.evaluate_stage(paths, run="r1", split="val")
+    mp.final_stage(paths, run="r1")
+    v = mp.viewer_stage(paths, run="r1", split="val", n=1)
+    page = open(v["pages"][0], encoding="utf-8").read()
+    assert "three@0.160.0" in page and '"blind":true' in page
+    data = json.loads(re.search(r"const DATA = (\{.*?\});$", page, re.M).group(1))
+    assert data["clips"][0]["notes"] == data["clips"][1]["notes"] != []     # notes never reveal the real clip
+    r = mp.report_stage(paths, name="t")
+    text = open(r["path"], encoding="utf-8").read()
+    assert "Acceptance criteria" in text and "Blade check" in text and "| r1 |" in text
