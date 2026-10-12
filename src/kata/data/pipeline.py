@@ -373,9 +373,16 @@ def _parse_selection(paths, sel_diffs: pl.DataFrame, sel_maps: pl.DataFrame, dow
 
 # --------------------------------------------------------------------------- leaderboards
 
-async def _crawl_leaderboards(paths, state, summary, pilot=False):
+def leaderboard_diffs(paths: Paths, pilot: bool = False, tier: str | None = None) -> pl.DataFrame:
+    """Parsed difficulties whose leaderboards are crawled; `tier` restricts to one tier (Phase 4 D6)."""
     diffs = pl.read_parquet(paths.processed / "difficulties.parquet").filter(pl.col("parse_status") == "ok")
-    diffs = _subset(diffs, paths, pilot)
+    if tier is not None:
+        diffs = diffs.filter(pl.col("tier") == tier)
+    return _subset(diffs, paths, pilot)
+
+
+async def _crawl_leaderboards(paths, state, summary, pilot=False, tier=None):
+    diffs = leaderboard_diffs(paths, pilot, tier)
     hashes = sorted(set(diffs["hash"]))
     done = state.done("bl-leaderboards")
     async with PoliteClient() as client:

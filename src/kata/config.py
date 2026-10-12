@@ -78,6 +78,16 @@ class Paths:
         return self.root / "generated"
 
     @property
+    def motion(self) -> Path:
+        """Phase 4 motion tracks (docs/phases/phase-4-motion.md §9)."""
+        return self.root / "motion"
+
+    @property
+    def motion_runs(self) -> Path:
+        """Phase 4 training runs (docs/phases/phase-4-motion.md §6.4)."""
+        return self.root / "runs" / "motion"
+
+    @property
     def state_db(self) -> Path:
         return self.root / "state" / "pipeline.duckdb"
 
@@ -92,6 +102,7 @@ class Paths:
     def ensure(self) -> "Paths":
         for p in (self.catalog_pages, self.maps, self.bl_leaderboards, self.bl_scores,
                   self.replays, self.processed, self.replay_frames, self.features,
-                  self.lowrated, self.validator, self.generated, self.state_db.parent, self.reports):
+                  self.lowrated, self.validator, self.generated, self.motion, self.motion_runs,
+                  self.state_db.parent, self.reports):
             p.mkdir(parents=True, exist_ok=True)
         return self

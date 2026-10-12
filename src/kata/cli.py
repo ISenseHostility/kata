@@ -54,8 +54,9 @@ def parse_maps(pilot: bool = PILOT):
 
 
 @data.command("crawl-leaderboards")
-def crawl_leaderboards(pilot: bool = PILOT):
-    _run("crawl-leaderboards", pipeline.crawl_leaderboards, pilot=pilot)
+def crawl_leaderboards(pilot: bool = PILOT,
+                       tier: str = typer.Option(None, help="Only this tier's difficulties (Phase 4: A).")):
+    _run("crawl-leaderboards", pipeline.crawl_leaderboards, pilot=pilot, tier=tier)
 
 
 @data.command("select-replays")
