@@ -89,3 +89,101 @@ def _prepare(paths, state, summary, pilot=False):
     summary["stats_train_tracks"] = len(train)
 
 prepare_stage = _with_state("motion-prepare", _prepare)
+
+
+# --------------------------------------------------------------------------- training and sampling
+# These stages import torch (the `audio` extra) inside the function, like the Phase 2 stages.
+
+GUIDANCE_VALUES = (1.0, 1.5, 2.0, 3.0, 4.0)
+TUNE_DIFFS = 50
+SPEED_SONGS = 3
+
+
+def _train(paths, state, summary, run, config=None, resume=False, hours=None, device="cuda", max_steps=None):
+    from kata.motion.train import train
+    summary.update(train(paths, run, config, resume, hours, device, max_steps))
+
+train_stage = _with_state("motion-train", _train)
+
+
+def _sample_dir(paths: Paths, run: str, split: str) -> Path:
+    return paths.generated / "motion" / run / split
+
+
+def _tune(paths, state, summary, run, n=TUNE_DIFFS, values=GUIDANCE_VALUES, device=None):
+    """Guidance weight on val (§7.1): best median timing F among the values passing criteria 2 and 4."""
+    from kata.motion.evaluate import criteria, evaluate_samples
+    from kata.motion.sample import Generator, eval_targets, sample_targets, spread
+    gen = Generator(paths, run, device=device)
+    targets = spread(eval_targets(paths, gen.run, "val"), n)
+    table = []
+    for w in values:
+        d = _sample_dir(paths, run, "tune") / f"w{w}"
+        sample_targets(gen, targets, d, w, seeds=(0,), label_only=False)
+        rows, pooled = evaluate_samples(paths, run, "val", targets, d)
+        crit = {c["criterion"]: c for c in criteria(rows, pooled)}
+        f = rows.filter(pl.col("source") == "generated")["timing_f"].median()
+        table.append({"guidance": w, "median_f": f, "plausible": crit[2]["pass"], "control": crit[4]["pass"]})
+    passing = [r for r in table if r["plausible"] and r["control"]]
+    best = max(passing or table, key=lambda r: r["median_f"] or 0.0)
+    note = None if passing else "no value passes criteria 2 and 4; best timing F chosen"
+    gen.run.guidance_path.write_text(json.dumps({"guidance": best["guidance"], "table": table, "note": note},
+                                                indent=1))
+    summary.update(guidance=best["guidance"], table=table, note=note, n_targets=targets.height)
+
+tune_stage = _with_state("motion-tune", _tune)
+
+
+def _sample(paths, state, summary, run, split="val", limit=None, device=None, batch_jobs=16):
+    from kata.motion.sample import Generator, eval_targets, sample_targets, spread
+    gen = Generator(paths, run, device=device)
+    targets = spread(eval_targets(paths, gen.run, split), limit)
+    summary.update(sample_targets(gen, targets, _sample_dir(paths, run, split), gen.run.guidance(),
+                                  batch_jobs=batch_jobs), targets=targets.height, guidance=gen.run.guidance())
+
+sample_stage = _with_state("motion-sample", _sample)
+
+
+def _evaluate(paths, state, summary, run, split="val", limit=None, device=None, force=False):
+    """Criteria for one split. Test is evaluated once per run (criterion 9); force only with approval."""
+    import time
+
+    from kata.motion.evaluate import criteria, evaluate_samples
+    from kata.motion.sample import durations, eval_targets, generate, spread
+    from kata.motion.train import Run
+    if split == "test" and (paths.motion_runs / run / "eval_test.json").exists() and not force:
+        raise ValueError(f"run {run} was already evaluated on test; re-running needs force=True and your approval")
+    targets = spread(eval_targets(paths, Run(paths, run), split), limit)
+    rows, pooled = evaluate_samples(paths, run, split, targets, _sample_dir(paths, run, split))
+    base_path = paths.processed / "baseline_eval.parquet"
+    baseline = pl.read_parquet(base_path).filter(pl.col("split") == split) if base_path.exists() else None
+    crit = criteria(rows, pooled, baseline)
+    speed = []
+    if split == "test":                                      # criterion 11, on the first few test songs
+        dur = durations(paths)
+        for r in targets.head(SPEED_SONGS).iter_rows(named=True):
+            t0 = time.monotonic()
+            generate(r["audio_sha256"], r["label"], r["nps"], run=run, paths=paths, device=device)
+            speed.append((time.monotonic() - t0) * 180.0 / dur[r["audio_sha256"]])
+        crit.append({"criterion": 11, "name": "speed", "value": f"max {max(speed):.1f} s per 3-min song",
+                     "pass": max(speed) <= 60.0})
+    f = paths.processed / "motion_eval.parquet"
+    if f.exists():
+        old = pl.read_parquet(f).filter(~((pl.col("run") == run) & (pl.col("split") == split)))
+        rows = pl.concat([old, rows], how="diagonal_relaxed")
+    rows.sort("run", "split", "hash", "characteristic", "difficulty", "source", "mode", "seed", "score_id",
+              nulls_last=True).write_parquet(f)
+    out = {"criteria": crit, "pooled": pooled, "speed": speed, "targets": targets.height}
+    (paths.motion_runs / run / f"eval_{split}.json").write_text(json.dumps(out, indent=1))
+    summary.update(criteria=[{k: c[k] for k in ("criterion", "value", "pass")} for c in crit])
+
+evaluate_stage = _with_state("motion-evaluate", _evaluate)
+
+
+def _final(paths, state, summary, run):
+    if not (paths.motion_runs / run / "ckpt" / "best.pt").exists():
+        raise FileNotFoundError(f"run {run} has no best checkpoint")
+    (paths.motion_runs / "final").write_text(run)
+    summary["final"] = run
+
+final_stage = _with_state("motion-final", _final)
