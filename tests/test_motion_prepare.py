@@ -35,6 +35,19 @@ def test_right_handed_track_grid_centring_and_hits():
     assert np.allclose(p.hit_times, notes["time_s"])
 
 
+def test_a_map_lag_moves_motion_and_hits_onto_the_audio_clock():
+    # Pilot §16: a map sits a few ms off its audio and the player cuts on the notes, so the whole
+    # track moves by the lag, not only the hits; otherwise hits leave the swings that make them.
+    notes = synth_notes()
+    a = prepare_replay(synth_replay(notes), notes, left_handed=False)
+    b = prepare_replay(synth_replay(notes), notes, left_handed=False, audio_lag_s=2 / FPS)
+    assert b.frame0 == a.frame0 - 2 and np.allclose(a.data, b.data, atol=1e-4)
+    assert np.allclose(b.hit_times, a.hit_times - 2 / FPS)
+    c = prepare_replay(synth_replay(notes), notes, left_handed=False, audio_lag_s=0.006)   # sub-frame
+    for h in (0, 1):
+        assert np.allclose(_hit_times(c, h), notes["time_s"][notes["color"] == h] - 0.006, atol=1e-5)
+
+
 @pytest.mark.parametrize("mode,flags", [("mirror_all", (True, True)), ("mirror_ids", (False, False))])
 def test_left_handed_replays_are_recovered_whichever_way_the_game_mirrors(mode, flags):
     notes = synth_notes()

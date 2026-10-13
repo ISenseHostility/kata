@@ -12,7 +12,8 @@ import polars as pl
 
 from kata.config import Paths
 from kata.data.pipeline import _with_state
-from kata.motion.prepare import MotionStore, Rejected, channel_stats, motion_config, prepare_replay
+from kata.motion.prepare import (MAX_AUDIO_LAG_MS, MotionStore, Rejected, channel_stats, motion_config,
+                                 prepare_replay)
 from kata.validate.rules import nps
 
 KEY = ["hash", "characteristic", "difficulty"]
@@ -30,11 +31,21 @@ def _recoverable(reason: str | None) -> bool:
     return "left_handed" in parts and parts <= RECOVERABLE
 
 
-def _prepare_one(root: str, score_id: str, bsor_path: str, notes: dict, left_handed: bool) -> dict:
+def map_audio_lags(sync: pl.DataFrame) -> dict[str, float]:
+    """Per map: the median drum lag over its difficulties, in ms (§3.3). The lag belongs to the map
+    (difficulties agree to ~0.3 ms), so the median outvotes one difficulty the estimator got wrong.
+    A median past MAX_AUDIO_LAG_MS is unmeasured; such maps, and maps without one, get 0."""
+    med = (sync.filter((pl.col("src") == "drums") & pl.col("lag_ms").is_not_nan())
+           .group_by("hash").agg(pl.col("lag_ms").median()))
+    return {h: (v if abs(v) <= MAX_AUDIO_LAG_MS else 0.0) for h, v in med.iter_rows()}
+
+
+def _prepare_one(root: str, score_id: str, bsor_path: str, notes: dict, left_handed: bool,
+                 audio_lag_s: float = 0.0) -> dict:
     from kata.data import bsor
     store = MotionStore(Paths(Path(root)).motion)
     try:
-        p = prepare_replay(bsor.parse(Path(bsor_path).read_bytes()), notes, left_handed)
+        p = prepare_replay(bsor.parse(Path(bsor_path).read_bytes()), notes, left_handed, audio_lag_s)
     except Rejected as e:
         return {"status": "rejected", "reject_reason": str(e)}
     except Exception as e:  # recorded per replay; the stage keeps going
@@ -56,6 +67,7 @@ def _prepare(paths, state, summary, pilot=False):
     notes = pl.read_parquet(P / "notes.parquet").join(replays.select(KEY).unique(), on=KEY, how="semi")
     by_diff = {k: {c: g[c].to_numpy() for c in ("x", "y", "color", "cut_dir", "time_s")}
                for k, g in notes.partition_by(KEY, as_dict=True).items()}
+    lags = map_audio_lags(pl.read_parquet(P / "map_audio_sync.parquet", columns=["hash", "src", "lag_ms"]))
     store = MotionStore(paths.motion)
     store.open_for_write(motion_config())
 
@@ -67,13 +79,14 @@ def _prepare(paths, state, summary, pilot=False):
             futures.append((r, pool.submit(_prepare_one, str(paths.root), sid,
                                            str(paths.replays / r["hash"] / f"{sid}.bsor"),
                                            by_diff[(r["hash"], r["characteristic"], r["difficulty"])],
-                                           bool(r["left_handed"]))))
+                                           bool(r["left_handed"]), lags.get(r["hash"], 0.0) / 1000)))
         for i, (r, f) in enumerate(futures):
             key = (r["hash"], r["characteristic"], r["difficulty"])
             rows.append({"score_id": str(r["score_id"]), **{k: r[k] for k in KEY}, "label": r["difficulty"],
                          "split": r["split"], "audio_sha256": r["audio_sha256"], "tier": r["tier"],
                          "nps": nps(by_diff[key]["time_s"]), "height_median": r["height_median"],
-                         "motion_version": store.version, **f.result()})
+                         "audio_lag_ms": lags.get(r["hash"], 0.0), "motion_version": store.version,
+                         **f.result()})
             if (i + 1) % 1000 == 0:
                 print(f"  [motion-prepare] {i + 1}/{len(futures)}", flush=True)
     tracks = pl.DataFrame(rows, infer_schema_length=None).sort("score_id")
@@ -198,7 +211,8 @@ final_stage = _with_state("motion-final", _final)
 def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
     """Generated (full, seed 0) next to the first real replay for n songs spread over tempo (§7.3).
     Both clips share the map notes; in blind mode they appear only after Reveal (viewer.page). The page
-    carries the song's audio when it is on disk."""
+    carries the song's audio when it is on disk. Tracks are on the audio clock, so the notes move by
+    the map's drum lag too (§3.3)."""
     import numpy as np
 
     from kata.motion.evaluate import real_hits
@@ -212,8 +226,9 @@ def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
                                how="left").sort("est_bpm", nulls_last=True)
     targets = targets.unique("audio_sha256", keep="first", maintain_order=True)
     store = MotionStore(paths.motion)
-    meta = tracks_table(paths, Run(paths, run).config().pilot).select("score_id", "frame0")
+    meta = tracks_table(paths, Run(paths, run).config().pilot).select("score_id", "frame0", "audio_lag_ms")
     frame0 = dict(zip(meta["score_id"], meta["frame0"]))
+    lag_s = {sid: lag / 1000 for sid, lag in zip(meta["score_id"], meta["audio_lag_ms"])}
     notes = pl.read_parquet(paths.processed / "notes.parquet")
     maps = pl.read_parquet(paths.processed / "maps.parquet", columns=["hash", "audio_file"])
     audio_file = dict(zip(maps["hash"], maps["audio_file"]))
@@ -228,7 +243,7 @@ def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
         raw = np.asarray(store.load(sid), np.float32)
         kn = notes.filter((pl.col("hash") == key[0]) & (pl.col("characteristic") == key[1])
                           & (pl.col("difficulty") == key[2]))
-        note_list = [[float(t), int(x), int(y), int(c), int(d)] for t, x, y, c, d in
+        note_list = [[float(t) - lag_s[sid], int(x), int(y), int(c), int(d)] for t, x, y, c, d in
                      kn.select("time_s", "x", "y", "color", "cut_dir").iter_rows()]
         real = clip(raw[:, :27], real_hits(raw, frame0[sid]), frame0[sid], note_list)
         generated = clip(s["motion"], (s["hits_left"], s["hits_right"]), notes=note_list)

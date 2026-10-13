@@ -109,6 +109,9 @@ def write_root(p, n_notes: int = 40) -> dict:
     pl.DataFrame({"hash": ["h1", "h2", "h3"], "characteristic": ["Standard"] * 3, "difficulty": ["Expert"] * 3,
                   "tier": ["A", "A", "B"], "parse_status": ["ok"] * 3}).write_parquet(
         p.processed / "difficulties.parquet")
+    pl.DataFrame({"hash": ["h1"] * 4 + ["h2"] * 2, "src": ["drums"] * 3 + ["mix", "drums", "mix"],
+                  "difficulty": ["Expert", "Hard", "Normal", "Expert", "Expert", "Expert"],
+                  "lag_ms": [10.0, 12.0, 190.0, 30.0, 20.0, 0.0]}).write_parquet(p.processed / "map_audio_sync.parquet")
     pl.DataFrame({"audio_sha256": [a for a, _ in SONGS.values()], "status": ["ok", "ok"],
                   "duration_s": [duration, duration]}).write_parquet(p.processed / "audio_features.parquet")
     for sha, _ in SONGS.values():

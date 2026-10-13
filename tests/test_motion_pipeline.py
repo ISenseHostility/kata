@@ -42,6 +42,24 @@ def test_prepare_stage_tracks_rejects_stats_and_idempotency(paths):
     assert pl.read_parquet(paths.processed / "motion_tracks.parquet").equals(first)
 
 
+def test_tracks_move_by_their_map_drum_lag(paths):
+    # write_root: h1's drum lags are 10, 12 and 190 ms (median 12; mix rows ignored), h2's is 20 ms.
+    mp.prepare_stage(paths)
+    ok = pl.read_parquet(paths.processed / "motion_tracks.parquet").filter(pl.col("status") == "ok")
+    assert dict(zip(ok["score_id"], ok["audio_lag_ms"])) == {"1": 12.0, "2": 12.0, "5": 20.0}
+    notes = pl.read_parquet(paths.processed / "notes.parquet").filter(pl.col("hash") == "h1")["time_s"].to_numpy()
+    raw = np.asarray(MotionStore(paths.motion).load("1"), np.float32)
+    frame0 = ok.filter(pl.col("score_id") == "1")["frame0"][0]
+    hits = [(frame0 + r + raw[r, 29 + h]) / 50 for h in (0, 1) for r in np.flatnonzero(raw[:, 27 + h] > 0)]
+    assert np.allclose(np.sort(hits), np.sort(notes) - 0.012, atol=1e-4)
+
+
+def test_a_map_lag_past_the_limit_or_missing_counts_as_unmeasured():
+    sync = pl.DataFrame({"hash": ["a", "a", "b", "c"], "src": ["drums", "drums", "drums", "mix"],
+                         "lag_ms": [-60.0, -70.0, float("nan"), 5.0]})
+    assert mp.map_audio_lags(sync) == {"a": 0.0}                     # b: no number; c: mix only
+
+
 def test_leaderboard_crawl_can_be_limited_to_one_tier(paths):
     assert sorted(leaderboard_diffs(paths)["hash"]) == ["h1", "h2", "h3"]
     assert sorted(leaderboard_diffs(paths, tier="A")["hash"]) == ["h1", "h2"]
@@ -118,6 +136,9 @@ def test_viewer_pages_and_report(trained):
     # Only the real clip was played against the map, so its sabers meet the notes: in blind mode the
     # notes stay hidden until Reveal, and neither clip carries them.
     assert data["notes"] != [] and all("notes" not in c for c in data["clips"])
+    # The tracks are on the audio clock, so the notes move by the map's drum lag too (h2: 20 ms).
+    times = pl.read_parquet(paths.processed / "notes.parquet").filter(pl.col("hash") == "h2")["time_s"]
+    assert np.allclose(sorted(n[0] for n in data["notes"]), np.sort(times.to_numpy()) - 0.020)
     assert "showNotes = !DATA.blind" in page
     r = mp.report_stage(paths, name="t")
     text = open(r["path"], encoding="utf-8").read()

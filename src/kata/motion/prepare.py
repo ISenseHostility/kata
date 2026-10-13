@@ -1,6 +1,7 @@
 """Replays -> 50 fps motion tracks (docs/phases/phase-4-motion.md §3). Pure numpy.
 
-A track is a (T, 31) float32 array on the grid t = (frame0 + i) / FPS, plus a validity mask.
+A track is a (T, 31) float32 array on the grid t = (frame0 + i) / FPS, plus a validity mask. Times
+are on the audio clock: the replay's clock minus the map's drum lag (§3.3).
 Channels: head, left saber, right saber as position (3) + 6D rotation (6) each, then per hand a
 hit flag and the hit's sub-frame offset (§3.3, §3.4).
 """
@@ -20,13 +21,14 @@ from kata.data.pipeline import ALIGN_MAX_P95_MS, ALIGN_MIN_MATCH_RATE
 from kata.motion.geometry import (MIRROR_CUT, blade, interpolate, matrix_to_rot6, monotonic,
                                   quat_to_matrix, reflect_x, resample, swept_plane_distance)
 
-MOTION_VERSION = "v2"
+MOTION_VERSION = "v3"
 FPS = 50
 MAX_GAP_S = 0.1
 BLADE_MAX_M = 0.02          # median cut point to swept blade plane; pilot: all replays <= 0.012 (spec §3.5)
 SWEEP_S = 1 / 90            # the swept plane runs through the tip this long before the cut
 MIN_CUTS = 10
 HEAD_Y_REF_M = 1.60         # heights are scaled to this median head height (pilot median 1.61 m; spec §3.2)
+MAX_AUDIO_LAG_MS = 50.0     # a larger map drum lag is the estimator a beat-fraction off: counted as unmeasured
 PARTS = ("head", "left", "right")
 N_CHANNELS = 31
 MOTION_DIM = 27
@@ -45,7 +47,9 @@ def motion_config() -> dict:
             "blade_check": "median cut point to swept blade plane", "sweep_s": SWEEP_S,
             "min_cuts": MIN_CUTS, "channels": list(CHANNELS), "centre": "median head x,z",
             "height": "y scaled by head_y_ref_m / median head y", "head_y_ref_m": HEAD_Y_REF_M,
-            "hit_time": "map time of the matched note", "align_min_match_rate": ALIGN_MIN_MATCH_RATE,
+            "hit_time": "map time of the matched note minus the map's drum lag",
+            "audio_lag": "median drums lag_ms over the map's difficulties (map_audio_sync); 0 if missing or larger",
+            "max_audio_lag_ms": MAX_AUDIO_LAG_MS, "align_min_match_rate": ALIGN_MIN_MATCH_RATE,
             "align_max_p95_ms": ALIGN_MAX_P95_MS}
 
 
@@ -58,7 +62,7 @@ class Prepared:
     frame0: int
     data: np.ndarray            # (T, 31) float32
     valid: np.ndarray           # (T,) bool
-    hit_times: np.ndarray       # unique map times of all hits, both hands (s)
+    hit_times: np.ndarray       # unique audio-clock times of all hits, both hands (s)
     info: dict = field(default_factory=dict)
 
 
@@ -75,8 +79,12 @@ def _poses(frames: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return t, pos, quat
 
 
-def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bool) -> Prepared:
+def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bool,
+                   audio_lag_s: float = 0.0) -> Prepared:
     """One replay -> a track. notes: the difficulty's x, y, color, cut_dir, time_s arrays.
+
+    audio_lag_s: how late the map's notes sit after the audio (> 0: late). The player cuts on the
+    notes, so the whole track, motion and hits, moves back by it onto the audio clock.
 
     Raises Rejected(reason) when alignment, the frame check or the blade check fails.
     """
@@ -129,7 +137,7 @@ def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bo
     if hands_swapped:
         pos, quat, hand = pos[:, [0, 2, 1]], quat[:, [0, 2, 1]], 1 - hand
 
-    frame0, p, q, valid = resample(t, pos, quat, FPS, MAX_GAP_S)
+    frame0, p, q, valid = resample(t - audio_lag_s, pos, quat, FPS, MAX_GAP_S)
     if not valid.any():
         raise Rejected("no_valid_frames")
     p[..., 0] -= np.median(p[valid, 0, 0])
@@ -142,7 +150,7 @@ def prepare_replay(replay: Replay, notes: dict[str, np.ndarray], left_handed: bo
         data[:, s:s + 3] = p[:, k]
         data[:, s + 3:s + 9] = matrix_to_rot6(quat_to_matrix(q[:, k]))
 
-    hit_t = np.asarray(notes["time_s"], dtype=np.float64)[idx]
+    hit_t = np.asarray(notes["time_s"], dtype=np.float64)[idx] - audio_lag_s
     f = hit_t * FPS - frame0
     fi = np.rint(f).astype(np.int64)
     inside = (fi >= 0) & (fi < len(data))

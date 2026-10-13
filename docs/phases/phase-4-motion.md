@@ -45,7 +45,7 @@ Throughput and I/O items are marked **[verify at setup]**.
 | D7 | Left-handed replays | **Recovered by mirroring**, gated by the alignment check and the blade check (§3.5) | Stay rejected (5.4 % of replays lost) |
 | D8 | Hand frame | **World-anchored play space**; head is its own track | Head-relative hands (roadmap sketch): lanes and layers are fixed in the world, not to the head |
 | D9 | Frame rate | **50 fps** + sub-frame hit offset | 100 fps (2× tokens per window); 30 fps (33 ms frames blur fast swings) |
-| D10 | Hit time | **Map time of the matched note** | Player's actual cut time (adds per-player timing noise Phase 5 must not reproduce) |
+| D10 | Hit time | **Map time of the matched note**, moved onto the audio clock by the map's drum lag (amended after the pilot, §3.4) | Player's actual cut time (adds per-player timing noise Phase 5 must not reproduce) |
 
 ---
 
@@ -167,8 +167,18 @@ note or chain head, attributed to the saber that made it (`saberType` from
 the cut info). Misses and bombs do not count.
 
 - Time: the **map time** `time_s` of the matched note (`matched_note_idx`),
-  not the player's cut time (D10).
-- Frame: `round(time_s · 50)`; offset: `time_s · 50 − frame`.
+  not the player's cut time (D10), minus the map's **drum lag** (v3, pilot
+  §16): `t = time_s − lag`.
+- Drum lag: the median over the map's difficulties of Phase 2's sync lag
+  against drum onsets (`map_audio_sync`, `src = drums`; > 0 means the notes
+  sit after the audio). Difficulties of one map agree to ~0.3 ms, so the
+  median outvotes one the estimator got wrong. A median past
+  `MAX_AUDIO_LAG_MS` = 50 ms (82 of 5,433 maps; mostly the estimator a
+  beat-fraction off) or a missing one counts as 0.
+- The player cuts on the notes, so the **whole track** moves by the lag,
+  not only the hits: the replay's clock minus the lag is the track's clock.
+  Tracks, hits and audio features then share the audio clock.
+- Frame: `round(t · 50)`; offset: `t · 50 − frame`.
 - Several notes cut by one hand in the same frame (stacks, towers) merge
   into one hit; the offset is their mean.
 - Stored as a binary flag per frame plus the offset. The training target
@@ -217,20 +227,20 @@ map, is **mirror augmentation**. It is off by default and gets one ablation
 
 ### 3.6 Normalisation
 
-`motion/v2/stats.json` holds per-channel mean and std of the 27 motion
+`motion/v3/stats.json` holds per-channel mean and std of the 27 motion
 channels over **train only**. They are applied at load time, as Phase 2
 does for audio. Hit pulses map to [−1, 1]; offsets are multiplied by 2.
 
 ### 3.7 Tables and arrays
 
-- `motion/v2/{score_id}.npy`: (T, 31) fp16, one per accepted replay
+- `motion/v3/{score_id}.npy`: (T, 31) fp16, one per accepted replay
   (Standard characteristic only, as Phase 1 selects).
   fp16 keeps positions to ~0.5 mm at 1 m.
-- `motion/v2/{score_id}.valid.npy`: (T,) bool.
+- `motion/v3/{score_id}.valid.npy`: (T,) bool.
 - `processed/motion_tracks.parquet`: `score_id, hash, characteristic,
   difficulty, split, label, nps, hps, n_frames, n_valid, n_hits_left,
   n_hits_right, mirrored, blade_median_m, status, reject_reason,
-  motion_version`.
+  audio_lag_ms, motion_version`.
 
 The table also carries the check results per replay: `world_mirrored`,
 `hands_swapped`, `blade_median_m`, `hand_y_l0..2` (mean saber height at
@@ -466,6 +476,9 @@ has replays.
    hands, unique times) and the Tier A map's note times for the same song
    and label. Exactly Phase 3's definition and code (`f_measure`,
    `TIMING_TOL_S`), so the baseline's `timing_f` is directly comparable.
+   The reference stays the map's own note times, not moved by the drum
+   lag (§3.4): it is what the baseline was scored against, and the lag
+   (p10 −11.6 ms, p90 +2.0 ms) is well inside ±30 ms.
 2. **Physical plausibility**: distributions of saber-tip speed at hits,
    peak tip speed per swing, wrist roll range per hand, hand–head distance,
    and head displacement over 1 s windows. Compared with real by p50 and
@@ -655,6 +668,8 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-12 | — | Pilot (§16), approved by you: blade check measures the distance to the swept blade plane, `BLADE_MAX_M` = 0.02 m (§3.5); y normalised by median head height, `head_height` argument on the generator (§3.2). `MOTION_VERSION` v2 |
 | 2026-10-12 | — | Pilot, approved by you: batch 64 runs as 2 micro-batches of 32, same gradient (§6.3) |
 | 2026-10-13 | — | Pilot, approved by you: `pilot-1` stopped at 19.8k steps (overfitting on 101 songs) and evaluated on `best.pt`; the quick check also logs a fixed-window val loss (§6.4, §16) |
+| 2026-10-13 | D10 | Amended, approved by you: hits and the whole track move onto the audio clock by the map's drum lag (§3.4, §16). `MOTION_VERSION` v3 |
+| 2026-10-13 | — | At your request: viewer pages carry the song's audio (§7.3, §12) |
 | 2026-10-13 | D3 | Amended at your request: runs are budgeted in GPU-hours and split into sessions of any length; Ctrl+C ends a session cleanly (§6.4, §6.5) |
 
 ---
@@ -781,9 +796,22 @@ lag (Phase 2 sync, drum onsets, Tier A): p10 −11.6 ms, median −3.5 ms, p90
 +2.0 ms, std 6.5 ms, a third of a frame. The audio cannot reveal that lag,
 so only train songs' offsets can be learnt, by memorising. Hit timing at
 ±30 ms barely depends on it (frame rounding alone is ≤ 10 ms).
-*Proposed, pending your decision:* subtract each map's measured drum lag
-from its hit times, so hits are on the audio clock (`MOTION_VERSION` v3,
-re-run `prepare`). Phase 5 wants audio-aligned notes anyway.
+*Decided (v3, approved by you):* each track moves onto the audio clock
+by its map's drum lag, motion and hits together (§3.4). Phase 5 wants
+audio-aligned notes anyway.
+
+*Result:* `pilot-2` is `pilot-1`'s config trained on v3 tracks to step
+5k (`best.pt`). On the same 1,280 fixed windows, EMA weights:
+
+| step 5k | train loss | val loss | val offset term |
+|---|---|---|---|
+| `pilot-1` (v2) | 0.236 | 0.530 | 0.251 |
+| `pilot-2` (v3) | 0.237 | 0.392 | 0.117 |
+
+The val offset term halves: against a constant guess (0.334) the model now
+explains ~65 % of the offset on new songs, up from ~25 %. The rest of the
+val loss is unchanged (0.279 → 0.276), so the whole drop is the offset.
+Overfitting is untouched, as expected; Tier A has to fix that.
 
 **Pilot evaluation** (`best.pt`, step 5k; 9 val difficulties, so every
 number below is a small sample and no bar applies to the pilot).
