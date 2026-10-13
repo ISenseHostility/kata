@@ -2,6 +2,8 @@
 name = "kata"
 version = "0.1.0"
 description = "Music-to-Beat-Saber map generation via learned player motion"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [
     { name = "ISenseHostility", email = "yaboijarno@gmail.com" }
 ]
