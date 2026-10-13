@@ -405,7 +405,10 @@ An epoch is defined as 1,000 steps; there is no notion of a full pass.
   replay) and scores the hits against that replay's own hits: median
   timing F (±30 ms) and median generated/real hit-count ratio. The kept
   checkpoint (`best.pt`) is the one with the best quick timing F, not the
-  lowest loss. Gradients are clipped at norm 1.0.
+  lowest loss. The same check logs `val_loss` (and its parts): the
+  diffusion loss of the EMA weights on val batches 0–7 with fixed noise
+  and no condition dropout, computed without touching the training RNG.
+  Unlike the 50 quick windows it shows overfitting (pilot, §16). Gradients are clipped at norm 1.0.
 
 ### 6.5 Experiment schedule
 
@@ -490,7 +493,8 @@ has replays.
   1 m blades, hits flashing on the blade, and the map's notes flying in.
   Both clips show the same map notes, so the notes never give away which
   clip is real (§17);
-- a file picker for the song's audio, played in sync;
+- the song's audio, carried in the page and played in sync (a file picker
+  instead when the audio is not on disk);
 - **blind mode**: two clips of the same song and label, generated and real,
   in random order; you guess which is real before it is revealed.
 
@@ -609,8 +613,9 @@ three.js is loaded by the viewer page from a CDN at a pinned version.
 
 Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 - Replays and map files are user content: not republished, not committed.
-- Generated motion and viewer pages stay local. The viewer reads audio from
-  a local file the user picks; it is never embedded or uploaded.
+- Generated motion and viewer pages stay local. Viewer pages carry the
+  song's audio (amended after the pilot, so a blind pass needs no file
+  picking), which is one more reason they are never committed or uploaded.
 - EDGE and the other papers in §15 are cited as sources of the method. No
   code is copied from them.
 
@@ -649,6 +654,7 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-12 | — | Spec approved. Prototype corrections to §3.5, §3.7, §5.2–5.3, §6.4, §7.1–7.3, §9, §11 (§17) |
 | 2026-10-12 | — | Pilot (§16), approved by you: blade check measures the distance to the swept blade plane, `BLADE_MAX_M` = 0.02 m (§3.5); y normalised by median head height, `head_height` argument on the generator (§3.2). `MOTION_VERSION` v2 |
 | 2026-10-12 | — | Pilot, approved by you: batch 64 runs as 2 micro-batches of 32, same gradient (§6.3) |
+| 2026-10-13 | — | Pilot, approved by you: `pilot-1` stopped at 19.8k steps (overfitting on 101 songs) and evaluated on `best.pt`; the quick check also logs a fixed-window val loss (§6.4, §16) |
 | 2026-10-13 | D3 | Amended at your request: runs are budgeted in GPU-hours and split into sessions of any length; Ctrl+C ends a session cleanly (§6.4, §6.5) |
 
 ---
@@ -739,8 +745,81 @@ internal SSD, so §6.6's copy does not apply. 1.86 steps/s is ~80k steps per
 steps, 28 min: loss 1.88 → 0.033, quick check on the song itself
 `val_timing_f` 0.935, rate ratio 0.93 (n = 5). The pipeline learns.
 
-**Pending (pilot night, Task 11 step 6).** Guidance chosen, pilot val
-criteria values, and your impression of the viewer pages.
+**Pilot run (2026-10-13).** `pilot-1`, base config, in two sessions
+(2 h + 1 h, resumed, §6.4): 19,829 steps at 1.82–1.87 steps/s.
+Checkpoints are 742 MB each, not ~0.5 GB (§9). The pilot has **101 train
+songs and 5 val songs** (9 val difficulties).
+
+| step | train loss (log) | quick `val_timing_f` | rate ratio |
+|---|---|---|---|
+| 5k | 0.25 | **0.758** | 0.87 |
+| 10k | 0.22 | 0.687 | 0.91 |
+| 15k | 0.18 | 0.687 | 0.94 |
+| 19.8k | 0.17 | — | — |
+
+The run was stopped at 19.8k instead of 12 h, at your decision: the
+pilot set is overfitting. Diffusion loss of the EMA weights on the same
+1,280 fixed windows (40 batches of 32, fixed noise, no condition dropout):
+
+| checkpoint | train | val |
+|---|---|---|
+| 5k (`best.pt`) | 0.236 | 0.530 |
+| 19.8k (`last.pt`) | 0.153 | 0.530 |
+
+Train loss falls a third while val loss does not move: with 101 songs the
+model memorises. That is the risk §13 calls most likely; Tier A has ~25×
+the songs. The quick check (9 windows) is too coarse to see this, so it now
+also logs a val loss (§6.4). Evaluation (tune, sample, evaluate, viewer)
+runs on `best.pt` (5k).
+
+**Hit offsets do not generalise.** Of the val loss, the offset term is
+0.251 at both checkpoints, against 0.002 on train. Predicting a constant
+gives 0.334 (offsets are uniform in the frame), so on new songs the model
+explains ~25 % of the offset. The cause is the target, not the model: hit
+time is the map's note time (D10), and maps sit off the audio by a per-map
+lag (Phase 2 sync, drum onsets, Tier A): p10 −11.6 ms, median −3.5 ms, p90
++2.0 ms, std 6.5 ms, a third of a frame. The audio cannot reveal that lag,
+so only train songs' offsets can be learnt, by memorising. Hit timing at
+±30 ms barely depends on it (frame rounding alone is ≤ 10 ms).
+*Proposed, pending your decision:* subtract each map's measured drum lag
+from its hit times, so hits are on the audio clock (`MOTION_VERSION` v3,
+re-run `prepare`). Phase 5 wants audio-aligned notes anyway.
+
+**Pilot evaluation** (`best.pt`, step 5k; 9 val difficulties, so every
+number below is a small sample and no bar applies to the pilot).
+
+*Guidance:* no value passes criteria 2 and 4, so `tune` picked the best
+timing F: **w = 1.0**. F falls as w rises (0.681 at 1.0 → 0.646 at 4.0);
+criterion 4 passes from w = 3.
+
+| # | Criterion | Pilot val (w = 1.0) | Bar met? |
+|---|-----------|---------------------|---|
+| 1 | Hit timing | median F 0.683 vs. baseline 0.534; ahead in 2 of 4 labels | no (labels) |
+| 2 | Plausibility | worst deviation +299 % (roll range p50) | no |
+| 3 | Hits agree with motion | 91.6 % vs. real 87.8 % | yes |
+| 4 | Control | Spearman 0.85; median rate error 0.10; label-only not increasing | no |
+| 5 | Diversity | 1.618 m vs. real 0.810 m | yes |
+| 6 | Seams | 99.0 % of 786 joins within real p99 (just under the bar) | no |
+
+- Overall the model already beats the rule-based baseline on timing
+  (0.683 vs. 0.534). The labels it trails in are Normal and Hard, with 2
+  samples each.
+- Criterion 2 fails on three of ten values. Saber tip speeds and reach
+  are within 15 % of real.
+  - **Roll range:** p50 +299 %, p95 −39 %. It is a song-long *unwrapped*
+    angle (`atan2` of the rotation's first column, §7.2.2). The angle is
+    ill-defined when that column points along the world z axis, and
+    `np.unwrap` turns jitter there into accumulated turns. So this may be
+    the metric rather than the motion: check the sabers' twist in the
+    viewer.
+  - **Head displacement in 1 s, p95:** 0.112 m vs. 0.202 m (−45 %). The
+    generated head is calmer in its largest moves. Likely cause: dodging
+    and ducking walls, which the audio does not show.
+- Hit counts trail real by 5–15 % for most labels (rate ratio 0.94 at
+  the last quick check).
+
+**Pending.** Your impression of the viewer pages
+(`reports/motion-viewer/pilot-1_val_*.html`, 5 pages, blind A/B).
 
 ---
 

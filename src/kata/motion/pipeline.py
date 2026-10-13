@@ -197,13 +197,14 @@ final_stage = _with_state("motion-final", _final)
 
 def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
     """Generated (full, seed 0) next to the first real replay for n songs spread over tempo (§7.3).
-    Both clips share the map notes; in blind mode they appear only after Reveal (viewer.page)."""
+    Both clips share the map notes; in blind mode they appear only after Reveal (viewer.page). The page
+    carries the song's audio when it is on disk."""
     import numpy as np
 
     from kata.motion.evaluate import real_hits
     from kata.motion.sample import eval_targets, load_sample, sample_path, spread
     from kata.motion.train import Run, tracks_table
-    from kata.motion.viewer import clip, write_page
+    from kata.motion.viewer import audio_src, clip, write_page
     targets = eval_targets(paths, Run(paths, run), split)
     tempo = paths.processed / "audio_tempo.parquet"
     if tempo.exists():
@@ -214,6 +215,8 @@ def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
     meta = tracks_table(paths, Run(paths, run).config().pilot).select("score_id", "frame0")
     frame0 = dict(zip(meta["score_id"], meta["frame0"]))
     notes = pl.read_parquet(paths.processed / "notes.parquet")
+    maps = pl.read_parquet(paths.processed / "maps.parquet", columns=["hash", "audio_file"])
+    audio_file = dict(zip(maps["hash"], maps["audio_file"]))
     written = []
     for i, r in enumerate(spread(targets, n).iter_rows(named=True)):
         key = (r["hash"], r["characteristic"], r["difficulty"])
@@ -230,7 +233,9 @@ def _viewer(paths, state, summary, run, split="test", n=6, blind=True):
         real = clip(raw[:, :27], real_hits(raw, frame0[sid]), frame0[sid], note_list)
         generated = clip(s["motion"], (s["hits_left"], s["hits_right"]), notes=note_list)
         out = paths.reports / "motion-viewer" / f"{run}_{split}_{i:02d}_{key[0]}_{key[2]}.html"
-        write_page(out, f"{key[0]} {key[2]} ({run})", generated, real, ("generated", "real"), blind)
+        song = paths.maps / key[0] / (audio_file.get(key[0]) or "")
+        write_page(out, f"{key[0]} {key[2]} ({run})", generated, real, ("generated", "real"), blind,
+                   audio=audio_src(song) if song.is_file() else None)
         written.append(str(out))
     summary.update(pages=written)
 

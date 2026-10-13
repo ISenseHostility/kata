@@ -87,6 +87,21 @@ def test_ctrl_c_stops_after_the_step_and_resumes_exactly(paths):
         assert all(torch.equal(sa[part][k], sb[part][k]) for k in sa[part]), part
 
 
+def test_quick_check_logs_a_val_loss_that_leaves_training_alone(paths):
+    # Pilot §16: a fixed-window val loss shows overfitting the 9-window quick check cannot. Its noise must
+    # not come from the training RNG, or logging it would change the run.
+    train(paths, "with", TINY, device="cpu", max_steps=4)
+    train(paths, "without", RunConfig(**{**TINY.__dict__, "val_loss_batches": 0}), device="cpu", max_steps=4)
+    ev = [json.loads(x)["eval"] for x in Run(paths, "with").log_path.read_text().splitlines() if '"eval"' in x]
+    assert len(ev) == 2 and all(e["val_loss"] > 0 and e["val_parts"]["l_off"] >= 0 for e in ev)
+    off = [json.loads(x)["eval"] for x in Run(paths, "without").log_path.read_text().splitlines() if '"eval"' in x]
+    assert off[0]["val_loss"] is None
+    sa, sb = _state(paths, "with"), _state(paths, "without")
+    for part in ("model", "ema"):
+        assert all(torch.equal(sa[part][k], sb[part][k]) for k in sa[part]), part
+    assert torch.equal(sa["rng"]["cpu"], sb["rng"]["cpu"])
+
+
 def test_time_limit_stops_cleanly_with_a_checkpoint(paths):
     s = train(paths, "t", TINY, device="cpu", hours=0.0)
     assert s["stopped"] == "time_limit" and s["step"] == 1

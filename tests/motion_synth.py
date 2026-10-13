@@ -103,7 +103,8 @@ def write_root(p, n_notes: int = 40) -> dict:
     pl.concat([pl.DataFrame({"hash": h, "characteristic": "Standard", "difficulty": "Expert", **notes})
                for h in SONGS]).write_parquet(p.processed / "notes.parquet")
     pl.DataFrame({"hash": list(SONGS), "split": [s for _, s in SONGS.values()],
-                  "audio_sha256": [a for a, _ in SONGS.values()], "pilot": [True, True]}).write_parquet(
+                  "audio_sha256": [a for a, _ in SONGS.values()], "audio_file": ["song.egg"] * 2,
+                  "pilot": [True, True]}).write_parquet(
         p.processed / "maps.parquet")
     pl.DataFrame({"hash": ["h1", "h2", "h3"], "characteristic": ["Standard"] * 3, "difficulty": ["Expert"] * 3,
                   "tier": ["A", "A", "B"], "parse_status": ["ok"] * 3}).write_parquet(

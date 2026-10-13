@@ -1,4 +1,5 @@
 """Phase 4 stages on a tiny synthetic data root."""
+import base64
 import json
 import re
 
@@ -122,6 +123,19 @@ def test_viewer_pages_and_report(trained):
     text = open(r["path"], encoding="utf-8").read()
     assert "Acceptance criteria" in text and "Blade check" in text and "| r1 |" in text
     assert "Hand height at hits vs. median head height" in text
+
+
+def test_viewer_pages_carry_the_song_audio(trained):
+    # The pages stay local (§12), so they carry the song: no file to pick before playing.
+    paths = trained
+    page = open(mp.viewer_stage(paths, run="r1", split="val", n=1)["pages"][0], encoding="utf-8").read()
+    assert '<audio id="audio"></audio>' in page and '<label id="pick">' in page   # no audio on disk: picker
+    song = pl.read_parquet(paths.processed / "maps.parquet").filter(pl.col("split") == "val").row(0, named=True)
+    (paths.maps / song["hash"]).mkdir(parents=True, exist_ok=True)
+    (paths.maps / song["hash"] / song["audio_file"]).write_bytes(b"OggS fake vorbis")
+    page = open(mp.viewer_stage(paths, run="r1", split="val", n=1)["pages"][0], encoding="utf-8").read()
+    assert f'<audio id="audio" src="data:audio/ogg;base64,{base64.b64encode(b"OggS fake vorbis").decode()}">' in page
+    assert 'id="pick" hidden' in page
 
 
 def _page_labels(path) -> list:

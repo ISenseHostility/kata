@@ -1,5 +1,6 @@
 """Local 3D viewer pages (docs/phases/phase-4-motion.md §7.3): two clips of one song side by side,
-synced to an audio file the viewer picks. Pages stay on this machine; audio is never embedded.
+played in sync with the song, which the page carries. Pages stay on this machine (§12); without the
+song's audio on disk the page falls back to a file picker.
 
 The game's axes are left-handed (+z towards the notes); three.js is right-handed. Clips are
 converted by flipping z: positions (x, y, -z), quaternions (-qx, -qy, qz, qw). The blade, along
@@ -8,6 +9,7 @@ saber-local +z in the game, is then along local -z.
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import random
@@ -19,6 +21,7 @@ from kata.motion.geometry import matrix_to_quat, rot6_to_matrix
 from kata.motion.prepare import FPS, TRACK
 
 THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+AUDIO_TYPES = {".egg": "audio/ogg", ".ogg": "audio/ogg", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 
 
 def clip(motion: np.ndarray, hits: tuple, frame0: int = 0, notes: list | None = None) -> dict:
@@ -33,7 +36,14 @@ def clip(motion: np.ndarray, hits: tuple, frame0: int = 0, notes: list | None = 
     return out
 
 
-def page(title: str, a: dict, b: dict, labels: tuple[str, str], blind: bool, seed: int | None = None) -> str:
+def audio_src(path: Path) -> str:
+    """The song as a data URI (.egg is Ogg Vorbis under Beat Saber's name)."""
+    kind = AUDIO_TYPES.get(path.suffix.lower(), "audio/ogg")
+    return f"data:{kind};base64,{base64.b64encode(path.read_bytes()).decode()}"
+
+
+def page(title: str, a: dict, b: dict, labels: tuple[str, str], blind: bool, seed: int | None = None,
+         audio: str | None = None) -> str:
     """One HTML page; with blind=True the clips are shown as A/B in random order until revealed.
 
     The order is fresh on every call unless a seed is given. The map's notes are shared by both
@@ -45,8 +55,9 @@ def page(title: str, a: dict, b: dict, labels: tuple[str, str], blind: bool, see
     notes = a.get("notes") or b.get("notes") or []
     data = {"clips": [{k: v for k, v in c.items() if k != "notes"} for c, _ in clips],
             "labels": [lab for _, lab in clips], "notes": notes, "blind": blind}
-    return TEMPLATE.replace("__TITLE__", html.escape(title)).replace("__THREE__", THREE_URL).replace(
-        "__DATA__", json.dumps(data, separators=(",", ":")))
+    return (TEMPLATE.replace("__TITLE__", html.escape(title)).replace("__THREE__", THREE_URL)
+            .replace("__PICK__", ' hidden' if audio else "").replace("__AUDIO__", f' src="{audio}"' if audio else "")
+            .replace("__DATA__", json.dumps(data, separators=(",", ":"))))
 
 
 def write_page(path: Path, *args, **kwargs) -> Path:
@@ -74,7 +85,7 @@ button { font: inherit; padding: 4px 12px; }
 <body>
 <header>
   <h1>__TITLE__</h1>
-  <label>Song audio <input id="file" type="file" accept="audio/*,.egg,.ogg"></label>
+  <label id="pick"__PICK__>Song audio <input id="file" type="file" accept="audio/*,.egg,.ogg"></label>
   <button id="play">Play</button>
   <input id="seek" type="range" min="0" max="1" step="0.001" value="0">
   <span id="time">0.0 s</span>
@@ -82,7 +93,7 @@ button { font: inherit; padding: 4px 12px; }
 </header>
 <div class="views"><div class="view"><canvas id="c0"></canvas><div class="tag" id="t0"></div></div>
 <div class="view"><canvas id="c1"></canvas><div class="tag" id="t1"></div></div></div>
-<audio id="audio"></audio>
+<audio id="audio"__AUDIO__></audio>
 <script type="module">
 import * as THREE from "__THREE__";
 const DATA = __DATA__;

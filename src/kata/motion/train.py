@@ -48,6 +48,7 @@ class RunConfig:
     eval_every: int = 5000
     log_every: int = 100
     eval_diffs: int = 50
+    val_loss_batches: int = 8         # val batches (fixed windows and noise) scored at each quick check; 0 = off
     eval_guidance: float = 2.0
     ddim_steps: int = 50
     mirror_aug: bool = False
@@ -199,6 +200,28 @@ def _ignore_ctrl_c(worker_id: int) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
+def val_loss(model, diffusion: Diffusion, sampler: WindowSampler, n_batches: int, weights: LossWeights,
+             micro_batch: int | None, amp, device: str) -> tuple[float | None, dict]:
+    """Mean loss over val batches 0 .. n_batches - 1 with fixed noise and no condition dropout (pilot §16):
+    shows overfitting that the quick check's few windows cannot. The global RNG is left as it was."""
+    if n_batches == 0 or not sampler.songs:
+        return None, {}
+    total, parts = 0.0, {}
+    devices = [torch.device(device)] if device.startswith("cuda") else []
+    with torch.random.fork_rng(devices=devices), torch.no_grad():
+        for k in range(n_batches):
+            batch = {key: torch.from_numpy(v).to(device) for key, v in sampler.batch(k).items()}
+            torch.manual_seed(k)
+            drawn = diffusion.draw(batch, 0.0)
+            n, mb, n_hits = len(batch["x"]), micro_batch or len(batch["x"]), batch["hit_mask"].sum()
+            for i in range(0, n, mb):
+                with amp:
+                    chunk, p = diffusion.chunk_loss(model, batch, drawn, weights, slice(i, i + mb), n_hits)
+                total += chunk.item()
+                parts = {q: parts.get(q, 0.0) + v for q, v in p.items()}
+    return total / n_batches, {q: v / n_batches for q, v in parts.items()}
+
+
 def _set_rng_state(s: dict, device: str) -> None:
     torch.set_rng_state(s["cpu"])
     if "cuda" in s and device.startswith("cuda"):
@@ -292,6 +315,8 @@ def train(paths: Paths, run_id: str, config: RunConfig | None = None, resume: bo
                 log(f"  [motion-train] {json.dumps(row)}")
             if step % c.eval_every == 0 or step == stop_at:
                 ev = quick_eval(ema, diffusion, val_sampler, val_windows, c.eval_guidance, c.ddim_steps, device)
+                ev["val_loss"], ev["val_parts"] = val_loss(ema, diffusion, val_sampler, c.val_loss_batches, weights,
+                                                           c.micro_batch, amp, device)
                 run.log({"step": step, "eval": ev})
                 if ev["val_timing_f"] is not None and ev["val_timing_f"] > best:
                     best = ev["val_timing_f"]
