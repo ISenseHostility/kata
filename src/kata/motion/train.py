@@ -7,6 +7,8 @@ import dataclasses
 import json
 import math
 import os
+import signal
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -170,6 +172,33 @@ def _rng_state(device: str) -> dict:
     return s
 
 
+class _CtrlC:
+    """While active, Ctrl+C asks the loop to stop after the current step and save; a second Ctrl+C aborts."""
+
+    def __init__(self, log):
+        self.requested, self.log = False, log
+        self.active = threading.current_thread() is threading.main_thread()    # signal handlers need it
+
+    def __enter__(self) -> _CtrlC:
+        if self.active:
+            self.previous = signal.signal(signal.SIGINT, self._handle)
+        return self
+
+    def _handle(self, signum, frame) -> None:
+        self.requested = True
+        signal.signal(signal.SIGINT, self.previous)
+        self.log("  [motion-train] Ctrl+C: stopping after this step and saving (press again to abort)")
+
+    def __exit__(self, *exc) -> None:
+        if self.active:
+            signal.signal(signal.SIGINT, self.previous)
+
+
+def _ignore_ctrl_c(worker_id: int) -> None:
+    # Ctrl+C reaches every process on the console; workers keep serving batches until the loop stops.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
 def _set_rng_state(s: dict, device: str) -> None:
     torch.set_rng_state(s["cpu"])
     if "cuda" in s and device.startswith("cuda"):
@@ -180,7 +209,8 @@ def train(paths: Paths, run_id: str, config: RunConfig | None = None, resume: bo
           hours: float | None = None, device: str = "cuda", max_steps: int | None = None, log=print) -> dict:
     """Train run_id. Fresh (config given, no checkpoint yet) or --resume from ckpt/last.pt.
 
-    Stops at total_steps, at max_steps, or after `hours` of wall time; always saves last.pt on exit.
+    Stops at total_steps, at max_steps, after `hours` of wall time, or at the end of the step during which
+    Ctrl+C was pressed; always saves last.pt on exit.
     """
     from kata.motion.evaluate import quick_eval, quick_windows
     run = Run(paths, run_id)
@@ -216,7 +246,8 @@ def train(paths: Paths, run_id: str, config: RunConfig | None = None, resume: bo
     stop_at = min(c.total_steps, max_steps or c.total_steps)
     loader = torch.utils.data.DataLoader(StepBatches(sampler, step, stop_at), batch_size=None,
                                          num_workers=c.workers, persistent_workers=c.workers > 0,
-                                         prefetch_factor=2 if c.workers > 0 else None)
+                                         prefetch_factor=2 if c.workers > 0 else None,
+                                         worker_init_fn=_ignore_ctrl_c if c.workers > 0 else None)
     # The iterator draws its base seed from the global RNG, so create it before restoring the RNG:
     # a resumed run then continues from exactly the state a straight run would have.
     batches = iter(loader)
@@ -233,46 +264,50 @@ def train(paths: Paths, run_id: str, config: RunConfig | None = None, resume: bo
     t_start = t_ckpt = time.monotonic()
     first_step, reason = step, "total_steps"
     model.train()
-    for batch in batches:
-        batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-        opt.zero_grad(set_to_none=True)
-        drawn = diffusion.draw(batch, c.p_uncond)
-        n, mb, n_hits = len(batch["x"]), c.micro_batch or len(batch["x"]), batch["hit_mask"].sum()
-        loss, parts = 0.0, {}
-        for i in range(0, n, mb):
-            with amp:
-                chunk, p = diffusion.chunk_loss(model, batch, drawn, weights, slice(i, i + mb), n_hits)
-            chunk.backward()
-            loss = loss + chunk.detach()
-            parts = {k: parts.get(k, 0.0) + v for k, v in p.items()}
-        torch.nn.utils.clip_grad_norm_(model.parameters(), c.grad_clip)
-        opt.step()
-        sched.step()
-        with torch.no_grad():
-            for pe, p in zip(ema.parameters(), model.parameters()):
-                pe.lerp_(p, 1 - c.ema)
-        step += 1
-        now = time.monotonic()
-        if step % c.log_every == 0:
-            row = {"step": step, "loss": loss.item(), **parts, "lr": sched.get_last_lr()[0],
-                   "steps_per_s": (step - first_step) / max(now - t_start, 1e-9)}
-            run.log(row)
-            log(f"  [motion-train] {json.dumps(row)}")
-        if step % c.eval_every == 0 or step == stop_at:
-            ev = quick_eval(ema, diffusion, val_sampler, val_windows, c.eval_guidance, c.ddim_steps, device)
-            run.log({"step": step, "eval": ev})
-            if ev["val_timing_f"] is not None and ev["val_timing_f"] > best:
-                best = ev["val_timing_f"]
-                checkpoint("best")
-        if now - t_ckpt >= c.ckpt_minutes * 60:
-            checkpoint("last")
-            t_ckpt = now
-        if hours is not None and now - t_start >= hours * 3600:
-            reason = "time_limit"
-            break
-        if max_steps is not None and step >= max_steps:
-            reason = "max_steps"
-            break
-    checkpoint("last")
+    with _CtrlC(log) as ctrl_c:
+        for batch in batches:
+            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+            opt.zero_grad(set_to_none=True)
+            drawn = diffusion.draw(batch, c.p_uncond)
+            n, mb, n_hits = len(batch["x"]), c.micro_batch or len(batch["x"]), batch["hit_mask"].sum()
+            loss, parts = 0.0, {}
+            for i in range(0, n, mb):
+                with amp:
+                    chunk, p = diffusion.chunk_loss(model, batch, drawn, weights, slice(i, i + mb), n_hits)
+                chunk.backward()
+                loss = loss + chunk.detach()
+                parts = {k: parts.get(k, 0.0) + v for k, v in p.items()}
+            torch.nn.utils.clip_grad_norm_(model.parameters(), c.grad_clip)
+            opt.step()
+            sched.step()
+            with torch.no_grad():
+                for pe, p in zip(ema.parameters(), model.parameters()):
+                    pe.lerp_(p, 1 - c.ema)
+            step += 1
+            now = time.monotonic()
+            if step % c.log_every == 0:
+                row = {"step": step, "loss": loss.item(), **parts, "lr": sched.get_last_lr()[0],
+                       "steps_per_s": (step - first_step) / max(now - t_start, 1e-9)}
+                run.log(row)
+                log(f"  [motion-train] {json.dumps(row)}")
+            if step % c.eval_every == 0 or step == stop_at:
+                ev = quick_eval(ema, diffusion, val_sampler, val_windows, c.eval_guidance, c.ddim_steps, device)
+                run.log({"step": step, "eval": ev})
+                if ev["val_timing_f"] is not None and ev["val_timing_f"] > best:
+                    best = ev["val_timing_f"]
+                    checkpoint("best")
+            if now - t_ckpt >= c.ckpt_minutes * 60:
+                checkpoint("last")
+                t_ckpt = now
+            if hours is not None and now - t_start >= hours * 3600:
+                reason = "time_limit"
+                break
+            if max_steps is not None and step >= max_steps:
+                reason = "max_steps"
+                break
+            if ctrl_c.requested:
+                reason = "interrupted"
+                break
+        checkpoint("last")
     return {"run": run_id, "step": step, "stopped": reason, "best_val_timing_f": best,
             "seconds": time.monotonic() - t_start}

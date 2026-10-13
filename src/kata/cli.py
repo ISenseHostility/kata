@@ -255,7 +255,7 @@ def motion_train(run: str = RUN, resume: bool = typer.Option(False, help="Contin
                                                           "fit a 16 GB GPU (new runs only)."),
                  workers: int = typer.Option(4, help="DataLoader worker processes (new runs only)."),
                  only_song: list[str] = typer.Option([], help="Overfit check: train on this audio sha only.")):
-    """Train a run overnight; resume it the next night with --resume (spec §6.4)."""
+    """Train a run for --hours (or until Ctrl+C); continue it in a later session with --resume (spec §6.4)."""
     from kata.motion import pipeline as mp
     from kata.motion.train import RunConfig
     config = None if resume else RunConfig(window=window, mirror_aug=mirror_aug, use_stems=stems, pilot=pilot,

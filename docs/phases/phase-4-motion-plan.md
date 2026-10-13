@@ -3715,7 +3715,7 @@ git commit -m "Phase 4: Tier A replays fetched and prepared" -m "Co-Authored-By:
 
 ### Task 13: Training nights (base run, ablations, final run)
 
-One run per night (`--hours 12`), the PC free during the day. Each night's command is started by the user or on their instruction.
+Each run is split into sessions of any length (spec §6.4–6.5): start it with `--hours N`, continue it with `--resume --hours N` until it reaches its planned steps (or stop a session early with Ctrl+C). A "night" below means 12 GPU-hours, not a calendar night. Each session's command is started by the user or on their instruction.
 
 **Files:**
 - Modify: `docs/phases/phase-4-motion.md` (§16 or a new §18 section with the ablation table, if the user wants it in the spec rather than only in the report)

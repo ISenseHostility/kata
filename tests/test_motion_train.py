@@ -1,5 +1,6 @@
 """Runs, checkpoints, exact resume and the time limit (spec §6.3-6.4), on CPU with a tiny model."""
 import json
+import signal
 
 import pytest
 
@@ -67,6 +68,23 @@ def test_run_guards_and_logs(paths):
     assert (run.ckpt_dir / "best.pt").exists()
     assert run.load_model("best").config == TINY.model
     assert run.motion_stats_path.exists() and run.audio_stats_path.exists()
+
+
+def test_ctrl_c_stops_after_the_step_and_resumes_exactly(paths):
+    # A session can end at any moment (§6.4): Ctrl+C finishes the current step and saves last.pt.
+    def log(line):
+        if '"step": 2,' in line:
+            signal.raise_signal(signal.SIGINT)
+
+    s = train(paths, "stopped", TINY, device="cpu", max_steps=4, log=log)
+    assert s["stopped"] == "interrupted" and s["step"] == 2
+    assert _state(paths, "stopped")["step"] == 2
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    train(paths, "stopped", resume=True, device="cpu", max_steps=4)
+    train(paths, "straight", TINY, device="cpu", max_steps=4)
+    sa, sb = _state(paths, "straight"), _state(paths, "stopped")
+    for part in ("model", "ema"):
+        assert all(torch.equal(sa[part][k], sb[part][k]) for k in sa[part]), part
 
 
 def test_time_limit_stops_cleanly_with_a_checkpoint(paths):
