@@ -671,6 +671,7 @@ Phase 1's posture (phase-1-data.md D6, §10) applies unchanged:
 | 2026-10-13 | D10 | Amended, approved by you: hits and the whole track move onto the audio clock by the map's drum lag (§3.4, §16). `MOTION_VERSION` v3 |
 | 2026-10-13 | — | At your request: viewer pages carry the song's audio (§7.3, §12) |
 | 2026-10-13 | D3 | Amended at your request: runs are budgeted in GPU-hours and split into sessions of any length; Ctrl+C ends a session cleanly (§6.4, §6.5) |
+| 2026-10-14 | — | Viewer pages approved; pilot closed. Tier A replay fetch started at your go (§2.2, §10 step 3) |
 
 ---
 
@@ -846,8 +847,8 @@ criterion 4 passes from w = 3.
 - Hit counts trail real by 5–15 % for most labels (rate ratio 0.94 at
   the last quick check).
 
-**Pending.** Your impression of the viewer pages
-(`reports/motion-viewer/pilot-1_val_*.html`, 5 pages, blind A/B).
+**Viewer pages** (`reports/motion-viewer/pilot-1_val_*.html`, 5 pages,
+blind A/B): looked good to you (2026-10-14). The pilot is closed.
 
 ---
 
