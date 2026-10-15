@@ -32,6 +32,8 @@ TIER_B_MIN_RATING = 0.95
 TIER_B_MIN_UPVOTES = 100
 ALIGN_MIN_MATCH_RATE = 0.98
 ALIGN_MAX_P95_MS = 2.0
+# parse-replays holds one batch of parsed replays in memory at a time (~1k note events each).
+PARSE_REPLAYS_BATCH = 500
 
 
 def _with_state(stage: str, fn):
@@ -556,27 +558,46 @@ def _parse_one_replay(bsor_path: str, frames_path: str, sel: dict, notes: dict) 
     return {"replay": row, "events": events_out}
 
 
-def _parse_replays(paths, state, summary, pilot=False):
+def _parse_replays(paths, state, summary, pilot=False, batch=PARSE_REPLAYS_BATCH, log=print):
     suffix = "_pilot" if pilot else ""
     sel = pl.read_parquet(paths.processed / f"replay_selection{suffix}.parquet")
     downloaded = state.done("replay-download")
     sel = sel.filter(pl.col("score_id").cast(pl.String).is_in(list(downloaded)))
-    notes = pl.read_parquet(paths.processed / "notes.parquet")
+    notes = (pl.scan_parquet(paths.processed / "notes.parquet")
+             .filter(pl.col("hash").is_in(sel["hash"].unique().to_list())).collect())
     by_diff = {k: g for k, g in notes.group_by(["hash", "characteristic", "difficulty"])}
-    results = []
+    rows = list(sel.iter_rows(named=True))
+    # Each batch goes to a part file, so memory holds one batch; the parts are joined at the end.
+    tmp = paths.processed / f"replay_parse{suffix}.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
     with ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as pool:
-        futures = []
-        for r in sel.iter_rows(named=True):
-            g = by_diff[(r["hash"], r["characteristic"], r["difficulty"])]
-            note_arrays = {c: g[c].to_numpy() for c in ("x", "y", "color", "cut_dir", "time_s")}
-            futures.append(pool.submit(
-                _parse_one_replay, str(paths.replays / r["hash"] / f"{r['score_id']}.bsor"),
-                str(paths.replay_frames / f"hash={r['hash']}" / f"{r['score_id']}.parquet"), r, note_arrays))
-        results = [f.result() for f in futures]
-    replays = pl.DataFrame([r["replay"] for r in results], infer_schema_length=None)
-    events = pl.DataFrame([e for r in results for e in r["events"]], infer_schema_length=None)
+        for b, start in enumerate(range(0, len(rows), batch)):
+            futures = []
+            for r in rows[start:start + batch]:
+                g = by_diff[(r["hash"], r["characteristic"], r["difficulty"])]
+                note_arrays = {c: g[c].to_numpy() for c in ("x", "y", "color", "cut_dir", "time_s")}
+                futures.append(pool.submit(
+                    _parse_one_replay, str(paths.replays / r["hash"] / f"{r['score_id']}.bsor"),
+                    str(paths.replay_frames / f"hash={r['hash']}" / f"{r['score_id']}.parquet"), r, note_arrays))
+            results = [f.result() for f in futures]
+            pl.DataFrame([r["replay"] for r in results], infer_schema_length=None).write_parquet(
+                tmp / f"replays-{b:05d}.parquet")
+            events = pl.DataFrame([e for r in results for e in r["events"]], infer_schema_length=None)
+            if events.height:
+                events.write_parquet(tmp / f"events-{b:05d}.parquet")
+            log(f"  [replay-parse] {min(start + batch, len(rows))}/{len(rows)}")
+    parts = sorted(tmp.glob("replays-*.parquet"))
+    replays = (pl.concat([pl.read_parquet(p) for p in parts], how="diagonal_relaxed") if parts
+               else pl.DataFrame())
     replays.write_parquet(paths.processed / f"replays{suffix}.parquet")
-    events.write_parquet(paths.processed / f"replay_note_events{suffix}.parquet")
+    parts = sorted(tmp.glob("events-*.parquet"))
+    events_out = paths.processed / f"replay_note_events{suffix}.parquet"
+    if parts:
+        pl.concat([pl.scan_parquet(p) for p in parts], how="diagonal_relaxed").sink_parquet(events_out)
+    else:
+        pl.DataFrame().write_parquet(events_out)
+    shutil.rmtree(tmp)
     summary["replays"] = replays.height
     summary["status"] = dict(replays.group_by("status").len().iter_rows())
     summary["reject_reasons"] = dict(replays.filter(pl.col("status") != "ok")
